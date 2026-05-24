@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Face Blur — Pick people</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <h1>Pick people to blur</h1>
+  <div id="analyzing">
+    <p id="analyzing-msg">Analyzing…</p>
+    <div class="progress"><div id="bar"></div></div>
+  </div>
+  <div id="picker" style="display:none">
+    <p>Tap the people you want blurred.</p>
+    <div class="people" id="people"></div>
+    <button id="next" disabled>Next</button>
+  </div>
+  <script type="module">
+    import { getPeople, startRender } from "/static/js/api.js";
+    import { subscribe } from "/static/js/progress.js";
+    const jobId = new URLSearchParams(location.search).get("job");
+    const selected = new Set();
+
+    function render(people) {
+      const root = document.getElementById("people");
+      root.innerHTML = "";
+      for (const p of people) {
+        const card = document.createElement("div");
+        card.className = "person";
+        card.dataset.id = p.id;
+        card.innerHTML = `<img src="${p.thumb_url}" alt=""><div class="label">${Math.round(p.first_seen_sec)}s · ${p.frame_count}f</div>`;
+        card.addEventListener("click", () => {
+          if (selected.has(p.id)) { selected.delete(p.id); card.classList.remove("selected"); }
+          else { selected.add(p.id); card.classList.add("selected"); }
+          document.getElementById("next").disabled = selected.size === 0;
+        });
+        root.appendChild(card);
+      }
+    }
+
+    async function showPicker() {
+      const { people } = await getPeople(jobId);
+      document.getElementById("analyzing").style.display = "none";
+      document.getElementById("picker").style.display = "block";
+      render(people);
+    }
+
+    subscribe(jobId, (ev) => {
+      if (ev.phase === "analyzing" && typeof ev.progress === "number") {
+        document.getElementById("bar").style.width = (ev.progress * 100).toFixed(1) + "%";
+      } else if (ev.phase === "awaiting_selection") {
+        showPicker();
+      } else if (ev.phase === "error") {
+        document.getElementById("analyzing-msg").textContent = "Error: " + (ev.message || "");
+      }
+    });
+
+    document.getElementById("next").addEventListener("click", async () => {
+      await startRender(jobId, [...selected]);
+      location.href = `/static/processing.html?job=${jobId}`;
+    });
+  </script>
+</body>
+</html>

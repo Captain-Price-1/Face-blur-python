@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Face Blur — Upload</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <h1>Face Blur</h1>
+  <p>Upload a video. We'll detect faces, you pick whose to blur, and we'll give you back a new file.</p>
+  <input type="file" id="file" accept="video/*">
+  <button id="upload" disabled>Upload</button>
+  <div id="status" style="margin-top:1em;"></div>
+  <script type="module">
+    import { uploadVideo } from "/static/js/api.js";
+    const fileEl = document.getElementById("file");
+    const btn = document.getElementById("upload");
+    const status = document.getElementById("status");
+    fileEl.addEventListener("change", () => { btn.disabled = !fileEl.files.length; });
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      status.textContent = "Uploading…";
+      try {
+        const { job_id } = await uploadVideo(fileEl.files[0]);
+        location.href = `/static/people.html?job=${job_id}`;
+      } catch (e) {
+        status.textContent = "Error: " + e.message;
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

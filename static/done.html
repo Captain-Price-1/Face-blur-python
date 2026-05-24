@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Face Blur — Done</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <h1>Done</h1>
+  <video id="preview" controls style="width:100%; max-width:600px;"></video>
+  <p>
+    <a id="dl" download="blurred.mp4"><button>Download MP4</button></a>
+    <button id="restart">Start over</button>
+  </p>
+  <script type="module">
+    import { downloadUrl, deleteJob } from "/static/js/api.js";
+    const jobId = new URLSearchParams(location.search).get("job");
+    const url = downloadUrl(jobId);
+    document.getElementById("preview").src = url;
+    document.getElementById("dl").href = url;
+    document.getElementById("restart").addEventListener("click", async () => {
+      await deleteJob(jobId);
+      location.href = "/static/index.html";
+    });
+  </script>
+</body>
+</html>

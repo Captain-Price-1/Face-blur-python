@@ -33,7 +33,7 @@ def apply_gaussian_blur(frame: np.ndarray, bbox: tuple[int, int, int, int], expa
         return
 
     roi = frame[y2:y_end, x2:x_end]
-    sigma = max(w2, h2) / 8.0
+    sigma = max(15.0, max(w2, h2) / 4.0)
     blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma)
     mask = _oval_mask(w2, h2, feather_px=int(min(w2, h2) * 0.15))
     frame[y2:y_end, x2:x_end] = (roi * (1 - mask) + blurred * mask).astype(np.uint8)

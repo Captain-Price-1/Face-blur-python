@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import jobs, storage
@@ -104,3 +105,11 @@ async def events(ws: WebSocket, job_id: str) -> None:
                 break
     except WebSocketDisconnect:
         pass
+
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/")
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/static/index.html")

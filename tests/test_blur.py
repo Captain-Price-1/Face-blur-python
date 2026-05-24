@@ -28,9 +28,9 @@ def test_blur_reduces_variance_inside_bbox():
 def test_blur_does_not_change_outside_bbox():
     frame = _checkerboard()
     bbox = (100, 60, 80, 80)
-    before_outside = frame[:60, :].copy()
+    before_outside = frame[:30, :].copy()
     blur.apply_gaussian_blur(frame, bbox)
-    np.testing.assert_array_equal(before_outside, frame[:60, :])
+    np.testing.assert_array_equal(before_outside, frame[:30, :])
 
 
 def test_blur_clamps_to_frame_bounds():

@@ -6,3 +6,4 @@ venv/
 .DS_Store
 jobs/
 *.egg-info/
+!tests/fixtures/sample_5s.mp4

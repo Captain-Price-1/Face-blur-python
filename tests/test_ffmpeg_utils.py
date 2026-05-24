@@ -70,3 +70,9 @@ def test_mux_combines_video_and_audio(tmp_path):
     assert output.exists()
     info = ffmpeg_utils.probe(output)
     assert info["has_audio"] is True
+
+
+def test_sample_fixture_is_valid(sample_video):
+    info = ffmpeg_utils.probe(sample_video)
+    assert 4 <= info["duration_sec"] <= 6
+    assert info["width"] <= 640

@@ -1,7 +1,8 @@
-"""In-memory job registry + asyncio worker."""
+"""In-memory job registry + background-thread worker."""
 from __future__ import annotations
 
 import asyncio
+import threading
 import traceback
 from typing import Any
 
@@ -9,65 +10,86 @@ from app import storage
 from app.pipeline import analyze, render
 
 _jobs: dict[str, dict[str, Any]] = {}
-_tasks: dict[str, asyncio.Task] = {}
+_threads: dict[str, threading.Thread] = {}
 _subscribers: dict[str, list[asyncio.Queue]] = {}
+_lock = threading.Lock()
 
 
 def reset() -> None:
     """Test helper: wipe in-memory state."""
-    _jobs.clear()
-    _tasks.clear()
-    _subscribers.clear()
+    with _lock:
+        _jobs.clear()
+        _threads.clear()
+        _subscribers.clear()
 
 
 def create() -> str:
     job_id = storage.new_job()
-    _jobs[job_id] = {"status": "created", "progress": 0.0}
+    with _lock:
+        _jobs[job_id] = {"status": "created", "progress": 0.0}
     return job_id
 
 
 def get(job_id: str) -> dict[str, Any]:
-    return _jobs.get(job_id, {"status": "unknown"})
+    with _lock:
+        return dict(_jobs.get(job_id, {"status": "unknown"}))
 
 
 def subscribe(job_id: str) -> asyncio.Queue:
     q: asyncio.Queue = asyncio.Queue()
-    _subscribers.setdefault(job_id, []).append(q)
+    with _lock:
+        _subscribers.setdefault(job_id, []).append(q)
     return q
 
 
 def _emit(job_id: str, event: dict[str, Any]) -> None:
+    # Best-effort: put event on queues thread-safely.
     for q in _subscribers.get(job_id, []):
-        q.put_nowait(event)
+        try:
+            loop = q._loop if hasattr(q, "_loop") else None  # CPython internal
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(q.put_nowait, event)
+            else:
+                q.put_nowait(event)
+        except Exception:
+            pass
 
 
 def _set(job_id: str, **fields) -> None:
-    _jobs[job_id].update(fields)
+    with _lock:
+        _jobs[job_id].update(fields)
 
 
 def start_analyze(job_id: str) -> None:
-    if job_id in _tasks and not _tasks[job_id].done():
-        return
-    _tasks[job_id] = asyncio.create_task(_run_analyze(job_id))
+    with _lock:
+        existing = _threads.get(job_id)
+        if existing is not None and existing.is_alive():
+            return
+        t = threading.Thread(target=_run_analyze, args=(job_id,), daemon=True)
+        _threads[job_id] = t
+    t.start()
 
 
 def start_render(job_id: str, blur_person_ids: list[str]) -> None:
-    if job_id in _tasks and not _tasks[job_id].done():
-        return
-    _tasks[job_id] = asyncio.create_task(_run_render(job_id, blur_person_ids))
+    with _lock:
+        existing = _threads.get(job_id)
+        if existing is not None and existing.is_alive():
+            return
+        t = threading.Thread(target=_run_render, args=(job_id, blur_person_ids), daemon=True)
+        _threads[job_id] = t
+    t.start()
 
 
-async def _run_analyze(job_id: str) -> None:
+def _run_analyze(job_id: str) -> None:
     _set(job_id, status="analyzing", progress=0.0)
     _emit(job_id, {"phase": "analyzing", "progress": 0.0})
-    loop = asyncio.get_running_loop()
 
     def cb(p: float) -> None:
         _set(job_id, progress=p)
-        loop.call_soon_threadsafe(_emit, job_id, {"phase": "analyzing", "progress": p})
+        _emit(job_id, {"phase": "analyzing", "progress": p})
 
     try:
-        await asyncio.to_thread(analyze.run, job_id, cb)
+        analyze.run(job_id, cb)
         _set(job_id, status="awaiting_selection", progress=1.0)
         _emit(job_id, {"phase": "awaiting_selection"})
     except Exception as e:
@@ -76,17 +98,16 @@ async def _run_analyze(job_id: str) -> None:
         _emit(job_id, {"phase": "error", "message": str(e)})
 
 
-async def _run_render(job_id: str, blur_person_ids: list[str]) -> None:
+def _run_render(job_id: str, blur_person_ids: list[str]) -> None:
     _set(job_id, status="rendering", progress=0.0)
     _emit(job_id, {"phase": "rendering", "progress": 0.0})
-    loop = asyncio.get_running_loop()
 
     def cb(p: float) -> None:
         _set(job_id, progress=p)
-        loop.call_soon_threadsafe(_emit, job_id, {"phase": "rendering", "progress": p})
+        _emit(job_id, {"phase": "rendering", "progress": p})
 
     try:
-        await asyncio.to_thread(render.run, job_id, blur_person_ids, cb)
+        render.run(job_id, blur_person_ids, cb)
         _set(job_id, status="done", progress=1.0)
         _emit(job_id, {"phase": "done", "download_url": f"/api/jobs/{job_id}/download"})
     except Exception as e:
@@ -96,7 +117,8 @@ async def _run_render(job_id: str, blur_person_ids: list[str]) -> None:
 
 
 def delete(job_id: str) -> None:
-    _jobs.pop(job_id, None)
-    _tasks.pop(job_id, None)
-    _subscribers.pop(job_id, None)
+    with _lock:
+        _jobs.pop(job_id, None)
+        _threads.pop(job_id, None)
+        _subscribers.pop(job_id, None)
     storage.delete_job(job_id)

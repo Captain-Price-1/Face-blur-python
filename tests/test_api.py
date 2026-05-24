@@ -68,3 +68,21 @@ def test_render_idempotent_when_already_running(tmp_path, monkeypatch, sample_vi
     r = client.post(f"/api/jobs/{job_id}/render", json={"blur_person_ids": []})
     assert r.status_code == 200
     _wait_status(client, job_id, "done")
+
+
+def test_ws_receives_progress(tmp_path, monkeypatch, sample_video):
+    monkeypatch.setattr(storage, "JOBS_ROOT", tmp_path)
+    jobs.reset()
+    client = TestClient(app)
+    with sample_video.open("rb") as fh:
+        job_id = client.post("/api/jobs", files={"file": ("s.mp4", fh, "video/mp4")}).json()["job_id"]
+
+    with client.websocket_connect(f"/api/jobs/{job_id}/events") as ws:
+        phases = set()
+        for _ in range(50):
+            ev = ws.receive_json()
+            phases.add(ev["phase"])
+            if ev["phase"] == "awaiting_selection":
+                break
+        assert "analyzing" in phases
+        assert "awaiting_selection" in phases

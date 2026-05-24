@@ -1,7 +1,7 @@
 """FastAPI app: REST endpoints. WebSocket added in Task 12, static mount in Task 14."""
 from __future__ import annotations
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -87,3 +87,20 @@ def download(job_id: str) -> FileResponse:
 def delete(job_id: str) -> dict:
     jobs.delete(job_id)
     return {"ok": True}
+
+
+@app.websocket("/api/jobs/{job_id}/events")
+async def events(ws: WebSocket, job_id: str) -> None:
+    await ws.accept()
+    queue = jobs.subscribe(job_id)
+    state = jobs.get(job_id)
+    if state.get("status") and state["status"] != "unknown":
+        await ws.send_json({"phase": state["status"], "progress": state.get("progress", 0.0)})
+    try:
+        while True:
+            ev = await queue.get()
+            await ws.send_json(ev)
+            if ev.get("phase") in ("done", "error"):
+                break
+    except WebSocketDisconnect:
+        pass

@@ -66,7 +66,7 @@ Key decisions:
 ```
 input.mp4
    │
-   ├─► ffmpeg: extract audio.aac
+   ├─► ffmpeg: extract audio.m4a  (copy original codec, no re-encode)
    │
    └─► ffmpeg: probe (fps, duration, resolution)
               │
@@ -179,7 +179,7 @@ def apply_gaussian_blur(frame, bbox, expand=1.25):
 
 **Interpolation rule:** linear interpolation between sampled-frame bboxes for the same `person_id`. If the gap to the nearest detection is > 0.5 s, do not blur — better a brief un-blur than a blur floating over empty space.
 
-**Encoding:** OpenCV writes `video_only.mp4` with `cv2.VideoWriter_fourcc(*'mp4v')`. ffmpeg then muxes the original audio with `-c:v copy -c:a copy` (no re-encode of the video stream → fast, lossless second step).
+**Encoding:** OpenCV writes `video_only.mp4` with `cv2.VideoWriter_fourcc(*'mp4v')`. ffmpeg then muxes the original audio with `-c:v copy -c:a copy` (no re-encode → fast, lossless second step). If the source has no audio track, skip the mux step and rename `video_only.mp4` to `output.mp4`.
 
 **Re-render is cheap.** Changing the selection re-runs only this phase; detection results stay cached.
 
@@ -277,7 +277,7 @@ Four pages, each its own HTML file. State lives in `?job=<uuid>` URL param — r
 
 - `static/js/api.js` — REST wrappers (single place to swap base URL for mobile).
 - `static/js/progress.js` — WebSocket with 1 s polling fallback.
-- `static/js/pages/{upload,people,processing,done}.js` — one per page.
+- Inline `<script type="module">` blocks at the bottom of each page HTML — keeps the MVP file count down. Page logic can be split into per-page files later if any one block grows past ~50 lines.
 
 ---
 
@@ -308,7 +308,7 @@ face-blur-app/
 ├── jobs/                           # runtime, gitignored
 │   └── <uuid>/
 │       ├── input.mp4
-│       ├── audio.aac
+│       ├── audio.m4a
 │       ├── analysis.json
 │       ├── thumbs/<person_id>.jpg
 │       └── output.mp4

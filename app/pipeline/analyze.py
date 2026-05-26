@@ -24,10 +24,10 @@ import numpy as np
 from app import ffmpeg_utils, storage
 from app.pipeline import detect, embed_cluster
 
-SAMPLE_EVERY_N_FRAMES = 2     # 1 = every frame, 2 = half, etc.
+SAMPLE_EVERY_N_FRAMES = 5     # 1 = every frame; higher = faster, sparser bbox samples
 DETECT_MAX_DIM = 640          # downsample frames bigger than this for detection
-IOU_THRESHOLD = 0.25          # min IoU to associate a detection with an existing track
-MAX_TRACK_GAP_SAMPLES = 4     # how many sampled frames a track can miss before closing
+IOU_THRESHOLD = 0.2           # min IoU to associate a detection with an existing track
+MAX_TRACK_GAP_SAMPLES = 3     # how many sampled frames a track can miss before closing
 EMA_ALPHA = 0.5               # bbox smoothing strength (0 = no smoothing, 1 = full)
 
 

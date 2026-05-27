@@ -28,6 +28,37 @@ def _make_silent_mp4_no_audio(path: Path, seconds: int = 2) -> None:
     )
 
 
+def test_extract_audio_transcodes_opus_source(tmp_path):
+    """Regression: YouTube delivers Opus, which can't be stream-copied into m4a.
+    extract_audio must transcode to AAC instead of copying."""
+    src = tmp_path / "src.mkv"  # mkv holds opus + h264 (like a YouTube DASH merge)
+    r = subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=160x120:r=5:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-c:a", "libopus", "-shortest", str(src),
+        ],
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        pytest.skip("ffmpeg build lacks libopus encoder")
+    dst = tmp_path / "audio.m4a"
+    ffmpeg_utils.extract_audio(src, dst)  # would raise with -c:a copy
+    assert dst.exists() and dst.stat().st_size > 0
+    assert ffmpeg_utils.probe(_with_dummy_video(dst, tmp_path))["has_audio"] is True
+
+
+def _with_dummy_video(audio_m4a: Path, tmp_path: Path) -> Path:
+    """probe() needs a video stream; wrap the audio with a 1-frame black video."""
+    out = tmp_path / "probe_wrap.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=16x16:r=1:d=1",
+         "-i", str(audio_m4a), "-c:v", "libx264", "-c:a", "copy", "-shortest", str(out)],
+        check=True, capture_output=True,
+    )
+    return out
+
+
 def test_probe_returns_fps_duration_resolution(tmp_path):
     src = tmp_path / "src.mp4"
     _make_silent_mp4(src, seconds=2)

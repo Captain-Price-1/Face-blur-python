@@ -7,7 +7,11 @@ from pathlib import Path
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, check=True, capture_output=True)
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace")[-2000:].strip()
+        raise RuntimeError(f"ffmpeg failed (exit {proc.returncode}): {stderr}")
+    return proc
 
 
 def probe(path: Path) -> dict:
@@ -32,8 +36,13 @@ def probe(path: Path) -> dict:
 
 
 def extract_audio(src: Path, dst: Path) -> None:
-    """Copy the source audio stream to `dst` without re-encoding."""
-    _run(["ffmpeg", "-y", "-i", str(src), "-vn", "-c:a", "copy", str(dst)])
+    """Extract the source audio to AAC/m4a.
+
+    Transcodes (not stream-copy) so any source codec — including Opus, which
+    YouTube commonly delivers and which cannot live in an MP4/m4a container —
+    is converted to AAC, which always can.
+    """
+    _run(["ffmpeg", "-y", "-i", str(src), "-vn", "-c:a", "aac", "-b:a", "192k", str(dst)])
 
 
 def mux(video_only: Path, audio: Path, dst: Path) -> None:

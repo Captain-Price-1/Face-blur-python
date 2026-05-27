@@ -31,7 +31,14 @@ def download(
 
     out_base = dst.with_suffix("")  # yt-dlp appends the real container ext
     ydl_opts = {
-        "format": f"bestvideo[height<={MAX_HEIGHT}]+bestaudio/best[height<={MAX_HEIGHT}]/best",
+        # Prefer m4a (AAC) audio so the merged mp4 carries a container-compatible
+        # codec. Falls back to any best audio (e.g. Opus) if no m4a is offered —
+        # ffmpeg_utils.extract_audio transcodes to AAC in that case.
+        "format": (
+            f"bestvideo[height<={MAX_HEIGHT}]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={MAX_HEIGHT}]+bestaudio/"
+            f"best[height<={MAX_HEIGHT}]/best"
+        ),
         "outtmpl": f"{out_base}.%(ext)s",
         "merge_output_format": "mp4",
         "quiet": True,

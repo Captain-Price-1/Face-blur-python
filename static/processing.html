@@ -6,19 +6,36 @@
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <h1>Rendering…</h1>
+  <h1 id="title">Processing…</h1>
   <div class="progress"><div id="bar"></div></div>
-  <p id="msg">Applying blur to the selected people.</p>
+  <p id="msg">Working on your video.</p>
   <script type="module">
-    import { subscribe } from "/static/js/progress.js";
+    import { subscribe } from "/static/js/progress.js?v=3";
     const jobId = new URLSearchParams(location.search).get("job");
+    const title = document.getElementById("title");
+    const bar = document.getElementById("bar");
+    const msg = document.getElementById("msg");
+    let navigated = false;
+
+    const labels = {
+      downloading: ["Downloading…", "Fetching the video."],
+      analyzing:   ["Analyzing…", "Finding faces."],
+      blurring:    ["Blurring…", "Blurring every face in one pass."],
+      rendering:   ["Rendering…", "Applying blur to the selected people."],
+    };
+
     subscribe(jobId, (ev) => {
-      if (ev.phase === "rendering" && typeof ev.progress === "number") {
-        document.getElementById("bar").style.width = (ev.progress * 100).toFixed(1) + "%";
+      const label = labels[ev.phase];
+      if (label) {
+        title.textContent = label[0];
+        msg.textContent = label[1];
+        if (typeof ev.progress === "number") bar.style.width = (ev.progress * 100).toFixed(1) + "%";
       } else if (ev.phase === "done") {
+        if (navigated) return;
+        navigated = true;
         location.href = `/static/done.html?job=${jobId}`;
       } else if (ev.phase === "error") {
-        document.getElementById("msg").textContent = "Error: " + (ev.message || "");
+        msg.textContent = "Error: " + (ev.message || "");
       }
     });
   </script>

@@ -13,7 +13,7 @@
     <button id="restart">Start over</button>
   </p>
   <script type="module">
-    import { downloadUrl, deleteJob } from "/static/js/api.js";
+    import { downloadUrl, deleteJob } from "/static/js/api.js?v=3";
     const jobId = new URLSearchParams(location.search).get("job");
     const url = downloadUrl(jobId);
     document.getElementById("preview").src = url;

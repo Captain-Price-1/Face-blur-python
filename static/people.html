@@ -17,10 +17,11 @@
     <button id="next" disabled>Next</button>
   </div>
   <script type="module">
-    import { getPeople, startRender } from "/static/js/api.js";
-    import { subscribe } from "/static/js/progress.js";
+    import { getPeople, startRender } from "/static/js/api.js?v=3";
+    import { subscribe } from "/static/js/progress.js?v=3";
     const jobId = new URLSearchParams(location.search).get("job");
     const selected = new Set();
+    let pickerShown = false;
 
     function render(people) {
       const root = document.getElementById("people");
@@ -40,6 +41,8 @@
     }
 
     async function showPicker() {
+      if (pickerShown) return;   // idempotent: poll + WS may both fire this
+      pickerShown = true;
       const { people } = await getPeople(jobId);
       document.getElementById("analyzing").style.display = "none";
       document.getElementById("picker").style.display = "block";

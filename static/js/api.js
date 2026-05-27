@@ -1,18 +1,19 @@
 const BASE = "";
 
-export async function uploadVideo(file) {
+export async function uploadVideo(file, blurAll = false) {
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("blur_all", blurAll ? "true" : "false");
   const r = await fetch(`${BASE}/api/jobs`, { method: "POST", body: fd });
   if (!r.ok) throw new Error(`upload failed: ${r.status}`);
   return r.json();
 }
 
-export async function createJobFromUrl(url) {
+export async function createJobFromUrl(url, blurAll = false) {
   const r = await fetch(`${BASE}/api/jobs/from-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, blur_all: blurAll }),
   });
   if (!r.ok) {
     let detail = `${r.status}`;

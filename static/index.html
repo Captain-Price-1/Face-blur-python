@@ -24,25 +24,40 @@
     <button id="fetch" style="margin-top:0.6em;" disabled>Fetch &amp; analyze</button>
   </section>
 
+  <p style="margin:1.5em 0 0.5em;">
+    <label style="cursor:pointer;">
+      <input type="checkbox" id="blurAll">
+      <strong>Blur everyone (fast)</strong> — skip the face picker and blur all faces in one pass.
+    </label>
+  </p>
+
   <div id="status" style="margin-top:1em;"></div>
 
   <script type="module">
-    import { uploadVideo, createJobFromUrl } from "/static/js/api.js";
+    import { uploadVideo, createJobFromUrl } from "/static/js/api.js?v=3";
     const fileEl = document.getElementById("file");
     const uploadBtn = document.getElementById("upload");
     const urlEl = document.getElementById("url");
     const fetchBtn = document.getElementById("fetch");
+    const blurAllEl = document.getElementById("blurAll");
     const status = document.getElementById("status");
 
     fileEl.addEventListener("change", () => { uploadBtn.disabled = !fileEl.files.length; });
     urlEl.addEventListener("input", () => { fetchBtn.disabled = !urlEl.value.trim(); });
 
+    // Where to go next depends on the mode: blur-all skips the picker.
+    function nextPage(jobId) {
+      return blurAllEl.checked
+        ? `/static/processing.html?job=${jobId}`
+        : `/static/people.html?job=${jobId}`;
+    }
+
     uploadBtn.addEventListener("click", async () => {
       uploadBtn.disabled = true;
       status.textContent = "Uploading…";
       try {
-        const { job_id } = await uploadVideo(fileEl.files[0]);
-        location.href = `/static/people.html?job=${job_id}`;
+        const { job_id } = await uploadVideo(fileEl.files[0], blurAllEl.checked);
+        location.href = nextPage(job_id);
       } catch (e) {
         status.textContent = "Error: " + e.message;
         uploadBtn.disabled = false;
@@ -53,8 +68,8 @@
       fetchBtn.disabled = true;
       status.textContent = "Starting download…";
       try {
-        const { job_id } = await createJobFromUrl(urlEl.value.trim());
-        location.href = `/static/people.html?job=${job_id}`;
+        const { job_id } = await createJobFromUrl(urlEl.value.trim(), blurAllEl.checked);
+        location.href = nextPage(job_id);
       } catch (e) {
         status.textContent = "Error: " + e.message;
         fetchBtn.disabled = false;

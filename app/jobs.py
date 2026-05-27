@@ -7,7 +7,7 @@ import traceback
 from typing import Any
 
 from app import downloader, storage
-from app.pipeline import analyze, render
+from app.pipeline import analyze, blur_all, render
 
 _jobs: dict[str, dict[str, Any]] = {}
 _threads: dict[str, threading.Thread] = {}
@@ -82,6 +82,28 @@ def start_download_and_analyze(job_id: str, url: str) -> None:
     t.start()
 
 
+def start_blur_all(job_id: str) -> None:
+    with _lock:
+        existing = _threads.get(job_id)
+        if existing is not None and existing.is_alive():
+            return
+        t = threading.Thread(target=_run_blur_all, args=(job_id,), daemon=True)
+        _threads[job_id] = t
+    t.start()
+
+
+def start_download_and_blur_all(job_id: str, url: str) -> None:
+    with _lock:
+        existing = _threads.get(job_id)
+        if existing is not None and existing.is_alive():
+            return
+        t = threading.Thread(
+            target=_run_download_and_blur_all, args=(job_id, url), daemon=True
+        )
+        _threads[job_id] = t
+    t.start()
+
+
 def start_render(job_id: str, blur_person_ids: list[str]) -> None:
     with _lock:
         existing = _threads.get(job_id)
@@ -109,6 +131,43 @@ def _run_download_and_analyze(job_id: str, url: str) -> None:
         return
 
     _run_analyze(job_id)
+
+
+def _run_blur_all(job_id: str) -> None:
+    _set(job_id, status="blurring", progress=0.0)
+    _emit(job_id, {"phase": "blurring", "progress": 0.0})
+
+    def cb(p: float) -> None:
+        _set(job_id, progress=p)
+        _emit(job_id, {"phase": "blurring", "progress": p})
+
+    try:
+        blur_all.run(job_id, cb)
+        _set(job_id, status="done", progress=1.0)
+        _emit(job_id, {"phase": "done", "download_url": f"/api/jobs/{job_id}/download"})
+    except Exception as e:
+        traceback.print_exc()
+        _set(job_id, status="error", error=str(e))
+        _emit(job_id, {"phase": "error", "message": str(e)})
+
+
+def _run_download_and_blur_all(job_id: str, url: str) -> None:
+    _set(job_id, status="downloading", progress=0.0)
+    _emit(job_id, {"phase": "downloading", "progress": 0.0})
+
+    def dl_cb(p: float) -> None:
+        _set(job_id, progress=p)
+        _emit(job_id, {"phase": "downloading", "progress": p})
+
+    try:
+        downloader.download(url, storage.input_path(job_id), dl_cb)
+    except Exception as e:
+        traceback.print_exc()
+        _set(job_id, status="error", error=f"download failed: {e}")
+        _emit(job_id, {"phase": "error", "message": f"download failed: {e}"})
+        return
+
+    _run_blur_all(job_id)
 
 
 def _run_analyze(job_id: str) -> None:

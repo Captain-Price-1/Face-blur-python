@@ -1,7 +1,7 @@
 """FastAPI app: REST endpoints. WebSocket added in Task 12, static mount in Task 14."""
 from __future__ import annotations
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,6 +17,7 @@ class RenderRequest(BaseModel):
 
 class UrlRequest(BaseModel):
     url: str
+    blur_all: bool = False
 
 
 @app.get("/api/health")
@@ -25,12 +26,18 @@ def health() -> dict:
 
 
 @app.post("/api/jobs")
-async def create_job(file: UploadFile = File(...)) -> dict:
+async def create_job(
+    file: UploadFile = File(...),
+    blur_all: bool = Form(False),
+) -> dict:
     job_id = jobs.create()
     target = storage.input_path(job_id)
     with target.open("wb") as fh:
         while chunk := await file.read(1 << 20):
             fh.write(chunk)
+    if blur_all:
+        jobs.start_blur_all(job_id)
+        return {"job_id": job_id, "status": "blurring"}
     jobs.start_analyze(job_id)
     return {"job_id": job_id, "status": "analyzing"}
 
@@ -41,7 +48,10 @@ def create_job_from_url(body: UrlRequest) -> dict:
     if not url:
         raise HTTPException(400, "url is required")
     job_id = jobs.create()
-    jobs.start_download_and_analyze(job_id, url)
+    if body.blur_all:
+        jobs.start_download_and_blur_all(job_id, url)
+    else:
+        jobs.start_download_and_analyze(job_id, url)
     return {"job_id": job_id, "status": "downloading"}
 
 

@@ -8,6 +8,20 @@ export async function uploadVideo(file) {
   return r.json();
 }
 
+export async function createJobFromUrl(url) {
+  const r = await fetch(`${BASE}/api/jobs/from-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!r.ok) {
+    let detail = `${r.status}`;
+    try { detail = (await r.json()).detail || detail; } catch {}
+    throw new Error(`could not start from link: ${detail}`);
+  }
+  return r.json();
+}
+
 export async function getJob(jobId) {
   const r = await fetch(`${BASE}/api/jobs/${jobId}`);
   return r.json();

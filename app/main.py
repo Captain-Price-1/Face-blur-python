@@ -15,6 +15,10 @@ class RenderRequest(BaseModel):
     blur_person_ids: list[str]
 
 
+class UrlRequest(BaseModel):
+    url: str
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True}
@@ -29,6 +33,16 @@ async def create_job(file: UploadFile = File(...)) -> dict:
             fh.write(chunk)
     jobs.start_analyze(job_id)
     return {"job_id": job_id, "status": "analyzing"}
+
+
+@app.post("/api/jobs/from-url")
+def create_job_from_url(body: UrlRequest) -> dict:
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(400, "url is required")
+    job_id = jobs.create()
+    jobs.start_download_and_analyze(job_id, url)
+    return {"job_id": job_id, "status": "downloading"}
 
 
 @app.get("/api/jobs/{job_id}")

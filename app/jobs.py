@@ -6,7 +6,7 @@ import threading
 import traceback
 from typing import Any
 
-from app import storage
+from app import downloader, storage
 from app.pipeline import analyze, render
 
 _jobs: dict[str, dict[str, Any]] = {}
@@ -70,6 +70,18 @@ def start_analyze(job_id: str) -> None:
     t.start()
 
 
+def start_download_and_analyze(job_id: str, url: str) -> None:
+    with _lock:
+        existing = _threads.get(job_id)
+        if existing is not None and existing.is_alive():
+            return
+        t = threading.Thread(
+            target=_run_download_and_analyze, args=(job_id, url), daemon=True
+        )
+        _threads[job_id] = t
+    t.start()
+
+
 def start_render(job_id: str, blur_person_ids: list[str]) -> None:
     with _lock:
         existing = _threads.get(job_id)
@@ -78,6 +90,25 @@ def start_render(job_id: str, blur_person_ids: list[str]) -> None:
         t = threading.Thread(target=_run_render, args=(job_id, blur_person_ids), daemon=True)
         _threads[job_id] = t
     t.start()
+
+
+def _run_download_and_analyze(job_id: str, url: str) -> None:
+    _set(job_id, status="downloading", progress=0.0)
+    _emit(job_id, {"phase": "downloading", "progress": 0.0})
+
+    def dl_cb(p: float) -> None:
+        _set(job_id, progress=p)
+        _emit(job_id, {"phase": "downloading", "progress": p})
+
+    try:
+        downloader.download(url, storage.input_path(job_id), dl_cb)
+    except Exception as e:
+        traceback.print_exc()
+        _set(job_id, status="error", error=f"download failed: {e}")
+        _emit(job_id, {"phase": "error", "message": f"download failed: {e}"})
+        return
+
+    _run_analyze(job_id)
 
 
 def _run_analyze(job_id: str) -> None:

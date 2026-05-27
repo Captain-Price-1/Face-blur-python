@@ -47,12 +47,18 @@
     }
 
     subscribe(jobId, (ev) => {
-      if (ev.phase === "analyzing" && typeof ev.progress === "number") {
-        document.getElementById("bar").style.width = (ev.progress * 100).toFixed(1) + "%";
+      const bar = document.getElementById("bar");
+      const msg = document.getElementById("analyzing-msg");
+      if (ev.phase === "downloading") {
+        msg.textContent = "Downloading video…";
+        if (typeof ev.progress === "number") bar.style.width = (ev.progress * 100).toFixed(1) + "%";
+      } else if (ev.phase === "analyzing") {
+        msg.textContent = "Analyzing…";
+        if (typeof ev.progress === "number") bar.style.width = (ev.progress * 100).toFixed(1) + "%";
       } else if (ev.phase === "awaiting_selection") {
         showPicker();
       } else if (ev.phase === "error") {
-        document.getElementById("analyzing-msg").textContent = "Error: " + (ev.message || "");
+        msg.textContent = "Error: " + (ev.message || "");
       }
     });
 

@@ -13,6 +13,7 @@ app = FastAPI(title="Face Blur App", version="0.1.0")
 
 class RenderRequest(BaseModel):
     blur_person_ids: list[str]
+    blur_mode: str = "face"
 
 
 class UrlRequest(BaseModel):
@@ -96,7 +97,9 @@ def start_render(job_id: str, body: RenderRequest) -> dict:
     state = jobs.get(job_id)
     if state.get("status") == "unknown":
         raise HTTPException(404, "job not found")
-    jobs.start_render(job_id, body.blur_person_ids)
+    if body.blur_mode not in {"face", "body_box", "body_silhouette"}:
+        raise HTTPException(400, "invalid blur_mode")
+    jobs.start_render(job_id, body.blur_person_ids, body.blur_mode)
     return {"status": "rendering"}
 
 

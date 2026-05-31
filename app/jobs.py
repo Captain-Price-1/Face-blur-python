@@ -104,12 +104,14 @@ def start_download_and_blur_all(job_id: str, url: str) -> None:
     t.start()
 
 
-def start_render(job_id: str, blur_person_ids: list[str]) -> None:
+def start_render(job_id: str, blur_person_ids: list[str], blur_mode: str = "face") -> None:
     with _lock:
         existing = _threads.get(job_id)
         if existing is not None and existing.is_alive():
             return
-        t = threading.Thread(target=_run_render, args=(job_id, blur_person_ids), daemon=True)
+        t = threading.Thread(
+            target=_run_render, args=(job_id, blur_person_ids, blur_mode), daemon=True
+        )
         _threads[job_id] = t
     t.start()
 
@@ -188,7 +190,7 @@ def _run_analyze(job_id: str) -> None:
         _emit(job_id, {"phase": "error", "message": str(e)})
 
 
-def _run_render(job_id: str, blur_person_ids: list[str]) -> None:
+def _run_render(job_id: str, blur_person_ids: list[str], blur_mode: str = "face") -> None:
     _set(job_id, status="rendering", progress=0.0)
     _emit(job_id, {"phase": "rendering", "progress": 0.0})
 
@@ -197,7 +199,7 @@ def _run_render(job_id: str, blur_person_ids: list[str]) -> None:
         _emit(job_id, {"phase": "rendering", "progress": p})
 
     try:
-        render.run(job_id, blur_person_ids, cb)
+        render.run(job_id, blur_person_ids, cb, blur_mode)
         _set(job_id, status="done", progress=1.0)
         _emit(job_id, {"phase": "done", "download_url": f"/api/jobs/{job_id}/download"})
     except Exception as e:

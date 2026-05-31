@@ -33,11 +33,11 @@ export async function getPeople(jobId) {
   return r.json();
 }
 
-export async function startRender(jobId, blurPersonIds) {
+export async function startRender(jobId, blurPersonIds, blurMode = "face") {
   const r = await fetch(`${BASE}/api/jobs/${jobId}/render`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ blur_person_ids: blurPersonIds }),
+    body: JSON.stringify({ blur_person_ids: blurPersonIds, blur_mode: blurMode }),
   });
   return r.json();
 }

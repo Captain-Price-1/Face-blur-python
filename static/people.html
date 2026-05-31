@@ -14,11 +14,17 @@
   <div id="picker" style="display:none">
     <p>Tap the people you want blurred.</p>
     <div class="people" id="people"></div>
+    <fieldset style="margin:1em 0; border:1px solid #ddd; border-radius:8px;">
+      <legend>Blur area</legend>
+      <label><input type="radio" name="mode" value="face" checked> Face only</label><br>
+      <label><input type="radio" name="mode" value="body_box"> Whole body (fast, rectangle)</label><br>
+      <label><input type="radio" name="mode" value="body_silhouette"> Whole body (silhouette — slower, best looking)</label>
+    </fieldset>
     <button id="next" disabled>Next</button>
   </div>
   <script type="module">
-    import { getPeople, startRender } from "/static/js/api.js?v=3";
-    import { subscribe } from "/static/js/progress.js?v=3";
+    import { getPeople, startRender } from "/static/js/api.js?v=4";
+    import { subscribe } from "/static/js/progress.js?v=4";
     const jobId = new URLSearchParams(location.search).get("job");
     const selected = new Set();
     let pickerShown = false;
@@ -66,7 +72,8 @@
     });
 
     document.getElementById("next").addEventListener("click", async () => {
-      await startRender(jobId, [...selected]);
+      const mode = document.querySelector('input[name=mode]:checked').value;
+      await startRender(jobId, [...selected], mode);
       location.href = `/static/processing.html?job=${jobId}`;
     });
   </script>

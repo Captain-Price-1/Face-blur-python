@@ -37,3 +37,20 @@ def apply_gaussian_blur(frame: np.ndarray, bbox: tuple[int, int, int, int], expa
     blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma)
     mask = _oval_mask(w2, h2, feather_px=int(min(w2, h2) * 0.15))
     frame[y2:y_end, x2:x_end] = (roi * (1 - mask) + blurred * mask).astype(np.uint8)
+
+
+def apply_gaussian_blur_mask(frame: np.ndarray, mask: np.ndarray) -> None:
+    """Blur the frame wherever `mask` (HxW uint8) is non-zero, in place.
+    Feathers the mask edge so the silhouette blends."""
+    ys, xs = np.where(mask > 0)
+    if ys.size == 0:
+        return
+    y1, y2, x1, x2 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    roi = frame[y1:y2, x1:x2]
+    sigma = max(15.0, max(roi.shape[0], roi.shape[1]) / 6.0)
+    blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma)
+    m = mask[y1:y2, x1:x2].astype(np.float32) / 255.0
+    # feather
+    k = max(3, (int(min(roi.shape[0], roi.shape[1]) * 0.05)) | 1)
+    m = cv2.GaussianBlur(m, (k, k), 0)[..., None]
+    frame[y1:y2, x1:x2] = (roi * (1 - m) + blurred * m).astype(np.uint8)

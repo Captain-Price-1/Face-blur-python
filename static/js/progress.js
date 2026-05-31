@@ -1,17 +1,13 @@
-import { getJob } from "./api.js";
+import { getJob, wsUrl } from "./api.js?v=5";
 
 /**
  * Drive a job's UI updates.
  *
- * Reliability model: HTTP polling every second is the GUARANTEED baseline —
- * it always advances the UI as long as the server is reachable. The WebSocket
- * is a best-effort enhancement layered on top for smoother, lower-latency
- * progress. If the WebSocket never connects, errors, or connects but goes
- * silent (which happens with some browsers/proxies), polling still drives
- * everything, so the page can never get stuck on a spinner.
- *
- * `onEvent` may therefore be called from both transports — handlers must be
- * idempotent.
+ * HTTP polling every second is the GUARANTEED baseline — it always advances
+ * the UI while the server is reachable. The WebSocket is a best-effort
+ * enhancement for smoother, lower-latency progress. If the WS never connects,
+ * errors, or goes silent, polling still drives everything, so the page can
+ * never get stuck. `onEvent` may fire from both transports — keep it idempotent.
  */
 export function subscribe(jobId, onEvent) {
   let stopped = false;
@@ -30,19 +26,14 @@ export function subscribe(jobId, onEvent) {
       const state = await getJob(jobId);
       onEvent({ phase: state.status, progress: state.progress, message: state.error });
       if (state.status === "done" || state.status === "error") stop();
-    } catch {
-      /* transient network error — next tick will retry */
-    }
+    } catch { /* transient — retry next tick */ }
   }
 
-  // Guaranteed baseline.
   pollTimer = setInterval(poll, 1000);
   poll();
 
-  // Best-effort enhancement.
   try {
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${protocol}//${location.host}/api/jobs/${jobId}/events`);
+    ws = new WebSocket(wsUrl(jobId));
     ws.onmessage = (e) => {
       if (stopped) return;
       let ev;
@@ -50,9 +41,7 @@ export function subscribe(jobId, onEvent) {
       onEvent(ev);
       if (ev.phase === "done" || ev.phase === "error") stop();
     };
-  } catch {
-    /* WebSocket unavailable — polling already covers us */
-  }
+  } catch { /* WS unavailable — polling covers us */ }
 
   return { stop };
 }

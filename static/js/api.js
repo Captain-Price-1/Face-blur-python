@@ -1,16 +1,18 @@
-const BASE = "";
+import { getApiBase } from "./config.js?v=5";
+
+const base = () => getApiBase();
 
 export async function uploadVideo(file, blurAll = false) {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("blur_all", blurAll ? "true" : "false");
-  const r = await fetch(`${BASE}/api/jobs`, { method: "POST", body: fd });
+  const r = await fetch(`${base()}/api/jobs`, { method: "POST", body: fd });
   if (!r.ok) throw new Error(`upload failed: ${r.status}`);
   return r.json();
 }
 
 export async function createJobFromUrl(url, blurAll = false) {
-  const r = await fetch(`${BASE}/api/jobs/from-url`, {
+  const r = await fetch(`${base()}/api/jobs/from-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, blur_all: blurAll }),
@@ -24,17 +26,22 @@ export async function createJobFromUrl(url, blurAll = false) {
 }
 
 export async function getJob(jobId) {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}`);
+  const r = await fetch(`${base()}/api/jobs/${jobId}`);
   return r.json();
 }
 
 export async function getPeople(jobId) {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}/people`);
-  return r.json();
+  const r = await fetch(`${base()}/api/jobs/${jobId}/people`);
+  const data = await r.json();
+  // Absolute-ize thumb URLs so they load when served from a static host.
+  for (const p of data.people || []) {
+    if (p.thumb_url && p.thumb_url.startsWith("/")) p.thumb_url = base() + p.thumb_url;
+  }
+  return data;
 }
 
 export async function startRender(jobId, blurPersonIds, blurMode = "face") {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}/render`, {
+  const r = await fetch(`${base()}/api/jobs/${jobId}/render`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ blur_person_ids: blurPersonIds, blur_mode: blurMode }),
@@ -43,9 +50,18 @@ export async function startRender(jobId, blurPersonIds, blurMode = "face") {
 }
 
 export function downloadUrl(jobId) {
-  return `${BASE}/api/jobs/${jobId}/download`;
+  return `${base()}/api/jobs/${jobId}/download`;
+}
+
+export function wsUrl(jobId) {
+  const b = base();
+  if (b) {
+    return b.replace(/^http/, "ws") + `/api/jobs/${jobId}/events`;
+  }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/api/jobs/${jobId}/events`;
 }
 
 export async function deleteJob(jobId) {
-  await fetch(`${BASE}/api/jobs/${jobId}`, { method: "DELETE" });
+  await fetch(`${base()}/api/jobs/${jobId}`, { method: "DELETE" });
 }

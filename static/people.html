@@ -1,80 +1,179 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
-  <title>Face Blur — Pick people</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Face Blur — Choose faces</title>
+  <link rel="stylesheet" href="css/app.css?v=5">
 </head>
 <body>
-  <h1>Pick people to blur</h1>
-  <div id="analyzing">
-    <p id="analyzing-msg">Analyzing…</p>
-    <div class="progress"><div id="bar"></div></div>
-  </div>
-  <div id="picker" style="display:none">
-    <p>Tap the people you want blurred.</p>
-    <div class="people" id="people"></div>
-    <fieldset style="margin:1em 0; border:1px solid #ddd; border-radius:8px;">
-      <legend>Blur area</legend>
-      <label><input type="radio" name="mode" value="face" checked> Face only</label><br>
-      <label><input type="radio" name="mode" value="body_box"> Whole body (fast, rectangle)</label><br>
-      <label><input type="radio" name="mode" value="body_silhouette"> Whole body (silhouette — slower, best looking)</label>
-    </fieldset>
-    <button id="next" disabled>Next</button>
-  </div>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <a class="brand" href="index.html">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="11" r="4"/><path d="M5 20a7 7 0 0114 0"/><path d="M3 5l3 3M21 5l-3 3" opacity=".7"/></svg></span>
+      <span><div class="name">Face<span>Blur</span></div><div class="tag">privacy for video</div></span>
+    </a>
+    <button class="theme-toggle" aria-label="Toggle theme"></button>
+  </header>
+
+  <main class="shell">
+    <nav class="stepper">
+      <div class="step done"><span class="dot">✓</span><span class="label">Add video</span></div>
+      <span class="bar"></span>
+      <div class="step active"><span class="dot">2</span><span class="label">Choose faces</span></div>
+      <span class="bar"></span>
+      <div class="step"><span class="dot">3</span><span class="label">Process</span></div>
+      <span class="bar"></span>
+      <div class="step"><span class="dot">4</span><span class="label">Download</span></div>
+    </nav>
+
+    <section class="card">
+      <!-- analyzing state -->
+      <div id="analyzing" class="proc">
+        <div class="ring indeterminate" id="ring"><div class="pct" id="pct">0%</div></div>
+        <div class="phase" id="phase">Analyzing…</div>
+        <div class="hint" id="hint">Finding and grouping every face in your video.</div>
+      </div>
+
+      <!-- picker state -->
+      <div id="picker" style="display:none">
+        <div class="eyebrow">Step 2</div>
+        <h1>Who should we hide?</h1>
+        <p class="sub">Tap the people you want blurred. We track each person across the whole video.</p>
+
+        <div class="toolbar">
+          <div class="count"><b id="selcount">0</b> selected · <span id="total">0</span> found</div>
+          <div>
+            <button class="linkbtn" id="selall">Select all</button>
+            <button class="linkbtn" id="selnone">Clear</button>
+          </div>
+        </div>
+
+        <div class="people" id="people"></div>
+
+        <fieldset class="scope">
+          <legend>Blur area</legend>
+          <div class="options">
+            <label class="opt selected"><input type="radio" name="mode" value="face" checked>
+              <span><span class="t">Face only</span><span class="d">Blur just the face — fast and precise.</span></span></label>
+            <label class="opt"><input type="radio" name="mode" value="body_box">
+              <span><span class="t">Whole body <span class="pill fast">fast</span></span><span class="d">Blur the full body as a soft rectangle.</span></span></label>
+            <label class="opt"><input type="radio" name="mode" value="body_silhouette">
+              <span><span class="t">Whole body — silhouette <span class="pill best">best looking</span></span><span class="d">Blur the exact body shape. Slower, cleanest result.</span></span></label>
+          </div>
+        </fieldset>
+
+        <div class="actions">
+          <a class="btn ghost" href="index.html">Back</a>
+          <button class="btn" id="next" disabled style="flex:1">
+            <span id="next-label">Select at least one person</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Runs locally · OpenCV · YuNet · YOLO11</footer>
+
   <script type="module">
-    import { getPeople, startRender } from "/static/js/api.js?v=4";
-    import { subscribe } from "/static/js/progress.js?v=4";
+    import { getPeople, startRender } from "./js/api.js?v=5";
+    import { subscribe } from "./js/progress.js?v=5";
+    import { initShell, toast } from "./js/ui.js?v=5";
+    initShell();
+
     const jobId = new URLSearchParams(location.search).get("job");
     const selected = new Set();
     let pickerShown = false;
 
-    function render(people) {
-      const root = document.getElementById("people");
+    const $ = (id) => document.getElementById(id);
+
+    function updateCount() {
+      $("selcount").textContent = selected.size;
+      $("next").disabled = selected.size === 0;
+      $("next-label").textContent = selected.size === 0
+        ? "Select at least one person"
+        : `Blur ${selected.size} ${selected.size === 1 ? "person" : "people"} →`;
+    }
+
+    function renderPeople(people) {
+      const root = $("people");
       root.innerHTML = "";
+      $("total").textContent = people.length;
       for (const p of people) {
         const card = document.createElement("div");
         card.className = "person";
-        card.dataset.id = p.id;
-        card.innerHTML = `<img src="${p.thumb_url}" alt=""><div class="label">${Math.round(p.first_seen_sec)}s · ${p.frame_count}f</div>`;
+        card.innerHTML = `
+          <span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+          <img src="${p.thumb_url}" alt="" loading="lazy">
+          <div class="meta">from ${Math.round(p.first_seen_sec)}s · ${p.frame_count}f</div>`;
         card.addEventListener("click", () => {
           if (selected.has(p.id)) { selected.delete(p.id); card.classList.remove("selected"); }
           else { selected.add(p.id); card.classList.add("selected"); }
-          document.getElementById("next").disabled = selected.size === 0;
+          updateCount();
         });
+        card.dataset.id = p.id;
         root.appendChild(card);
       }
+      $("selall").onclick = () => { selected.clear(); people.forEach(p => selected.add(p.id)); document.querySelectorAll(".person").forEach(c => c.classList.add("selected")); updateCount(); };
+      $("selnone").onclick = () => { selected.clear(); document.querySelectorAll(".person").forEach(c => c.classList.remove("selected")); updateCount(); };
     }
 
     async function showPicker() {
-      if (pickerShown) return;   // idempotent: poll + WS may both fire this
+      if (pickerShown) return;
       pickerShown = true;
-      const { people } = await getPeople(jobId);
-      document.getElementById("analyzing").style.display = "none";
-      document.getElementById("picker").style.display = "block";
-      render(people);
+      try {
+        const { people } = await getPeople(jobId);
+        $("analyzing").style.display = "none";
+        $("picker").style.display = "block";
+        if (!people.length) { toast("No faces detected in this video.", true); }
+        renderPeople(people);
+        updateCount();
+      } catch (e) { toast("Could not load faces: " + e.message, true); }
     }
 
+    // segmented radio visual state
+    document.querySelectorAll('input[name=mode]').forEach(r =>
+      r.addEventListener("change", () => {
+        document.querySelectorAll(".scope .opt").forEach(o => o.classList.remove("selected"));
+        r.closest(".opt").classList.add("selected");
+      }));
+
     subscribe(jobId, (ev) => {
-      const bar = document.getElementById("bar");
-      const msg = document.getElementById("analyzing-msg");
       if (ev.phase === "downloading") {
-        msg.textContent = "Downloading video…";
-        if (typeof ev.progress === "number") bar.style.width = (ev.progress * 100).toFixed(1) + "%";
+        $("phase").textContent = "Downloading video…";
+        $("hint").textContent = "Fetching the source.";
+        setRing(ev.progress);
       } else if (ev.phase === "analyzing") {
-        msg.textContent = "Analyzing…";
-        if (typeof ev.progress === "number") bar.style.width = (ev.progress * 100).toFixed(1) + "%";
+        $("phase").textContent = "Analyzing…";
+        $("hint").textContent = "Finding and grouping every face.";
+        setRing(ev.progress);
       } else if (ev.phase === "awaiting_selection") {
         showPicker();
       } else if (ev.phase === "error") {
-        msg.textContent = "Error: " + (ev.message || "");
+        $("phase").textContent = "Something went wrong";
+        $("hint").textContent = ev.message || "Please try again.";
+        $("ring").classList.remove("indeterminate");
       }
     });
 
-    document.getElementById("next").addEventListener("click", async () => {
+    function setRing(p) {
+      const ring = $("ring");
+      if (typeof p === "number" && p > 0) {
+        ring.classList.remove("indeterminate");
+        ring.style.setProperty("--p", (p * 100).toFixed(0));
+        $("pct").textContent = (p * 100).toFixed(0) + "%";
+      }
+    }
+
+    $("next").addEventListener("click", async () => {
       const mode = document.querySelector('input[name=mode]:checked').value;
-      await startRender(jobId, [...selected], mode);
-      location.href = `/static/processing.html?job=${jobId}`;
+      $("next").disabled = true;
+      $("next-label").innerHTML = `<span class="spin"></span> Starting…`;
+      try {
+        await startRender(jobId, [...selected], mode);
+        location.href = `processing.html?job=${jobId}`;
+      } catch (e) { toast(e.message, true); $("next").disabled = false; updateCount(); }
     });
   </script>
 </body>

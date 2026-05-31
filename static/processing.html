@@ -1,41 +1,84 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Face Blur — Processing</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="css/app.css?v=5">
 </head>
 <body>
-  <h1 id="title">Processing…</h1>
-  <div class="progress"><div id="bar"></div></div>
-  <p id="msg">Working on your video.</p>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <a class="brand" href="index.html">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="11" r="4"/><path d="M5 20a7 7 0 0114 0"/><path d="M3 5l3 3M21 5l-3 3" opacity=".7"/></svg></span>
+      <span><div class="name">Face<span>Blur</span></div><div class="tag">privacy for video</div></span>
+    </a>
+    <button class="theme-toggle" aria-label="Toggle theme"></button>
+  </header>
+
+  <main class="shell">
+    <nav class="stepper">
+      <div class="step done"><span class="dot">✓</span><span class="label">Add video</span></div>
+      <span class="bar"></span>
+      <div class="step done"><span class="dot">✓</span><span class="label">Choose faces</span></div>
+      <span class="bar"></span>
+      <div class="step active"><span class="dot">3</span><span class="label">Process</span></div>
+      <span class="bar"></span>
+      <div class="step"><span class="dot">4</span><span class="label">Download</span></div>
+    </nav>
+
+    <section class="card">
+      <div class="proc">
+        <div class="ring indeterminate" id="ring"><div class="pct" id="pct">0%</div></div>
+        <div class="phase" id="phase">Processing…</div>
+        <div class="hint" id="hint">Working on your video. This stays open automatically.</div>
+        <div class="bar-wrap"><div class="bar-fill" id="bar"></div></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Runs locally · OpenCV · YuNet · YOLO11</footer>
+
   <script type="module">
-    import { subscribe } from "/static/js/progress.js?v=3";
+    import { subscribe } from "./js/progress.js?v=5";
+    import { initShell } from "./js/ui.js?v=5";
+    initShell();
+
     const jobId = new URLSearchParams(location.search).get("job");
-    const title = document.getElementById("title");
-    const bar = document.getElementById("bar");
-    const msg = document.getElementById("msg");
+    const $ = (id) => document.getElementById(id);
     let navigated = false;
 
     const labels = {
-      downloading: ["Downloading…", "Fetching the video."],
-      analyzing:   ["Analyzing…", "Finding faces."],
-      blurring:    ["Blurring…", "Blurring every face in one pass."],
-      rendering:   ["Rendering…", "Applying blur to the selected people."],
+      downloading: ["Downloading…", "Fetching the source video."],
+      analyzing:   ["Analyzing…", "Finding and grouping faces."],
+      blurring:    ["Blurring everyone…", "Detecting and hiding every face in one pass."],
+      rendering:   ["Rendering…", "Applying the blur and encoding your video."],
     };
 
     subscribe(jobId, (ev) => {
-      const label = labels[ev.phase];
-      if (label) {
-        title.textContent = label[0];
-        msg.textContent = label[1];
-        if (typeof ev.progress === "number") bar.style.width = (ev.progress * 100).toFixed(1) + "%";
+      const l = labels[ev.phase];
+      if (l) {
+        $("phase").textContent = l[0];
+        $("hint").textContent = l[1];
+        if (typeof ev.progress === "number" && ev.progress > 0) {
+          $("ring").classList.remove("indeterminate");
+          const pct = (ev.progress * 100).toFixed(0);
+          $("ring").style.setProperty("--p", pct);
+          $("pct").textContent = pct + "%";
+          $("bar").style.width = pct + "%";
+        }
       } else if (ev.phase === "done") {
         if (navigated) return;
         navigated = true;
-        location.href = `/static/done.html?job=${jobId}`;
+        $("pct").textContent = "100%";
+        $("ring").style.setProperty("--p", 100);
+        $("bar").style.width = "100%";
+        location.href = `done.html?job=${jobId}`;
       } else if (ev.phase === "error") {
-        msg.textContent = "Error: " + (ev.message || "");
+        $("ring").classList.remove("indeterminate");
+        $("phase").textContent = "Something went wrong";
+        $("hint").textContent = ev.message || "Please go back and try again.";
       }
     });
   </script>

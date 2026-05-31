@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -9,6 +10,16 @@ from pydantic import BaseModel
 from app import jobs, storage
 
 app = FastAPI(title="Face Blur App", version="0.1.0")
+
+# Permissive CORS: this is a local single-user tool, and the GitHub Pages
+# showcase frontend (a different origin) must be able to call a backend the
+# user runs locally. No cookies/credentials are used.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class RenderRequest(BaseModel):

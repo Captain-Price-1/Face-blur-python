@@ -1,26 +1,67 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Face Blur — Done</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="css/app.css?v=5">
 </head>
 <body>
-  <h1>Done</h1>
-  <video id="preview" controls style="width:100%; max-width:600px;"></video>
-  <p>
-    <a id="dl" download="blurred.mp4"><button>Download MP4</button></a>
-    <button id="restart">Start over</button>
-  </p>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <a class="brand" href="index.html">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="11" r="4"/><path d="M5 20a7 7 0 0114 0"/><path d="M3 5l3 3M21 5l-3 3" opacity=".7"/></svg></span>
+      <span><div class="name">Face<span>Blur</span></div><div class="tag">privacy for video</div></span>
+    </a>
+    <button class="theme-toggle" aria-label="Toggle theme"></button>
+  </header>
+
+  <main class="shell">
+    <nav class="stepper">
+      <div class="step done"><span class="dot">✓</span><span class="label">Add video</span></div>
+      <span class="bar"></span>
+      <div class="step done"><span class="dot">✓</span><span class="label">Choose faces</span></div>
+      <span class="bar"></span>
+      <div class="step done"><span class="dot">✓</span><span class="label">Process</span></div>
+      <span class="bar"></span>
+      <div class="step active"><span class="dot">4</span><span class="label">Download</span></div>
+    </nav>
+
+    <section class="card result">
+      <div class="badge-ok">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+        Done — faces anonymized
+      </div>
+      <h1>Your video is ready</h1>
+      <p class="sub">Preview it below, then download. Audio is preserved.</p>
+
+      <video id="preview" controls playsinline></video>
+
+      <div class="actions">
+        <a class="btn" id="dl" download="blurred.mp4" style="flex:1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
+          Download MP4
+        </a>
+        <button class="btn ghost" id="restart">Start over</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Runs locally · OpenCV · YuNet · YOLO11</footer>
+
   <script type="module">
-    import { downloadUrl, deleteJob } from "/static/js/api.js?v=3";
+    import { downloadUrl, deleteJob } from "./js/api.js?v=5";
+    import { initShell } from "./js/ui.js?v=5";
+    initShell();
+
     const jobId = new URLSearchParams(location.search).get("job");
     const url = downloadUrl(jobId);
     document.getElementById("preview").src = url;
     document.getElementById("dl").href = url;
     document.getElementById("restart").addEventListener("click", async () => {
-      await deleteJob(jobId);
-      location.href = "/static/index.html";
+      try { await deleteJob(jobId); } catch {}
+      location.href = "index.html";
     });
   </script>
 </body>

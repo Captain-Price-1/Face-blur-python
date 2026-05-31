@@ -32,6 +32,17 @@ PREFETCH_QUEUE_SIZE = 8  # bounded so we don't run out of RAM on huge videos
 
 VALID_MODES = ("face", "body_box", "body_silhouette")
 
+# Body modes: run the (expensive) YOLO model only every Nth frame in a single
+# sequential pass, and HOLD the matched body box / mask forward for the
+# in-between frames. Sequential decode + sparse inference is far faster than
+# seeking to sampled frames in a separate pre-pass. A held entry expires after
+# HOLD_FRAMES so a person who leaves the frame stops being blurred shortly
+# after, while a brief detection miss never un-blurs them.
+BODY_DETECT_EVERY = 5
+SIL_DETECT_EVERY = 3
+HOLD_FRAMES_BOX = 12
+HOLD_FRAMES_SIL = 6
+
 
 def run(
     job_id: str,
@@ -56,14 +67,6 @@ def run(
             )
     for pid in per_person:
         per_person[pid].sort(key=lambda x: x[0])
-
-    # For body_box: build per-person BODY samples in a sparse pre-pass before
-    # opening the ffmpeg pipe.
-    per_person_body: dict[str, list[tuple[int, tuple[int, int, int, int]]]] = {}
-    if blur_mode == "body_box":
-        per_person_body = _build_body_samples(
-            src, blur_person_ids, per_person, max_gap_frames
-        )
 
     cap = cv2.VideoCapture(str(src))
     n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -109,6 +112,10 @@ def run(
     decoder_thread = threading.Thread(target=decoder, daemon=True)
     decoder_thread.start()
 
+    # Hold-forward state for body modes: pid -> [bbox|mask, ttl].
+    held_boxes: dict[str, list] = {}
+    held_masks: dict[str, list] = {}
+
     frame_idx = 0
     try:
         while True:
@@ -123,12 +130,13 @@ def run(
                     if bbox is not None:
                         apply_gaussian_blur(frame, bbox)
             elif blur_mode == "body_box":
-                for pid in blur_person_ids:
-                    bbox = _interpolate_bbox(per_person_body.get(pid, []), frame_idx, max_gap_frames)
-                    if bbox is not None:
-                        apply_gaussian_blur(frame, bbox)
-            else:  # body_silhouette — per-frame segmentation
-                _blur_silhouettes(frame, frame_idx, blur_person_ids, per_person, max_gap_frames)
+                _blur_body_box(
+                    frame, frame_idx, blur_person_ids, per_person, max_gap_frames, held_boxes
+                )
+            else:  # body_silhouette
+                _blur_silhouettes(
+                    frame, frame_idx, blur_person_ids, per_person, max_gap_frames, held_masks
+                )
 
             try:
                 ffmpeg.stdin.write(frame.tobytes())
@@ -167,50 +175,39 @@ def _match_body(face_bbox, body_bboxes):
     return best
 
 
-def _build_body_samples(
-    src,
+def _blur_body_box(
+    frame,
+    frame_idx: int,
     blur_person_ids: list[str],
     per_person: dict[str, list[tuple[int, tuple[int, int, int, int]]]],
     max_gap_frames: int,
-) -> dict[str, list[tuple[int, tuple[int, int, int, int]]]]:
-    """Sparse pre-pass: at each frame index that has a face sample for a
-    selected person, run YOLO person detection and match each selected face
-    to a body box via containment. Returns per-person BODY samples."""
+    held: dict[str, list],
+) -> None:
+    """Single-pass body-box blur. Runs YOLO person detection every
+    BODY_DETECT_EVERY frames, matches each selected person's interpolated face
+    box to a body box, and holds the result forward for the in-between frames."""
     from app.pipeline import body
 
-    # Sampled frame indices = sorted unique frames across all selected people.
-    sampled = sorted({
-        f
-        for pid in blur_person_ids
-        for f, _ in per_person.get(pid, [])
-    })
-    if not sampled:
-        return {}
-
-    per_person_body: dict[str, list[tuple[int, tuple[int, int, int, int]]]] = {}
-    cap = cv2.VideoCapture(str(src))
-    try:
-        for idx in sampled:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            body_bboxes = body.detect_bodies(frame)
-            if not body_bboxes:
-                continue
+    if frame_idx % BODY_DETECT_EVERY == 0:
+        bodies = body.detect_bodies(frame)
+        if bodies:
             for pid in blur_person_ids:
-                face_bbox = _interpolate_bbox(per_person.get(pid, []), idx, max_gap_frames)
+                face_bbox = _interpolate_bbox(per_person.get(pid, []), frame_idx, max_gap_frames)
                 if face_bbox is None:
                     continue
-                matched = _match_body(face_bbox, body_bboxes)
+                matched = _match_body(face_bbox, bodies)
                 if matched is not None:
-                    per_person_body.setdefault(pid, []).append((idx, matched))
-    finally:
-        cap.release()
+                    held[pid] = [matched, HOLD_FRAMES_BOX]
 
-    for pid in per_person_body:
-        per_person_body[pid].sort(key=lambda x: x[0])
-    return per_person_body
+    for pid in list(held):
+        bbox, ttl = held[pid]
+        # YOLO body boxes are already tight around the whole person, so use a
+        # small expand (not the wide face default that pads for hair/jaw).
+        apply_gaussian_blur(frame, bbox, expand=1.1)
+        if ttl <= 1:
+            del held[pid]
+        else:
+            held[pid][1] = ttl - 1
 
 
 def _blur_silhouettes(
@@ -219,26 +216,36 @@ def _blur_silhouettes(
     blur_person_ids: list[str],
     per_person: dict[str, list[tuple[int, tuple[int, int, int, int]]]],
     max_gap_frames: int,
+    held: dict[str, list],
 ) -> None:
-    """Run per-frame segmentation and blur each selected person's matched mask."""
+    """Single-pass silhouette blur. Runs YOLO segmentation every
+    SIL_DETECT_EVERY frames, matches each selected person's interpolated face
+    box to a body mask, and holds the mask forward for the in-between frames."""
     from app.pipeline import body
 
-    seg = body.segment_bodies(frame)
-    if not seg:
-        return
-    seg_boxes = [b for b, _ in seg]
-    for pid in blur_person_ids:
-        face_bbox = _interpolate_bbox(per_person.get(pid, []), frame_idx, max_gap_frames)
-        if face_bbox is None:
-            continue
-        matched = _match_body(face_bbox, seg_boxes)
-        if matched is None:
-            continue
-        # find the mask for the matched box
-        for b, mask in seg:
-            if b == matched:
-                apply_gaussian_blur_mask(frame, mask)
-                break
+    if frame_idx % SIL_DETECT_EVERY == 0:
+        seg = body.segment_bodies(frame)
+        if seg:
+            seg_boxes = [b for b, _ in seg]
+            for pid in blur_person_ids:
+                face_bbox = _interpolate_bbox(per_person.get(pid, []), frame_idx, max_gap_frames)
+                if face_bbox is None:
+                    continue
+                matched = _match_body(face_bbox, seg_boxes)
+                if matched is None:
+                    continue
+                for b, mask in seg:
+                    if b == matched:
+                        held[pid] = [mask, HOLD_FRAMES_SIL]
+                        break
+
+    for pid in list(held):
+        mask, ttl = held[pid]
+        apply_gaussian_blur_mask(frame, mask)
+        if ttl <= 1:
+            del held[pid]
+        else:
+            held[pid][1] = ttl - 1
 
 
 def _interpolate_bbox(

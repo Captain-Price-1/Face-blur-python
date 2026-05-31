@@ -5,6 +5,28 @@ import cv2
 import numpy as np
 
 
+def _fast_blur(roi: np.ndarray) -> np.ndarray:
+    """Strong privacy blur at roughly constant cost regardless of region size.
+
+    Downscales the region so its longer side is ~16px, then upscales with
+    linear interpolation for a smooth (non-blocky) result. This is O(pixels)
+    and avoids the huge-kernel cost of cv2.GaussianBlur with a large sigma —
+    critical for full-body regions, which can be hundreds of px tall.
+    """
+    h, w = roi.shape[:2]
+    if w == 0 or h == 0:
+        return roi
+    # Downscale so the longer side becomes ~6px (min 3x downscale), which
+    # destroys facial/identifying detail, then upscale smoothly. Constant cost
+    # regardless of region size — unlike a large-sigma Gaussian.
+    target = 4.0
+    scale = max(3.0, max(w, h) / target)
+    small = cv2.resize(
+        roi, (max(1, int(w / scale)), max(1, int(h / scale))), interpolation=cv2.INTER_AREA
+    )
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
 def _oval_mask(w: int, h: int, feather_px: int) -> np.ndarray:
     """Returns a HxWx1 float32 mask in [0, 1] with feathered oval shape."""
     mask = np.zeros((h, w), dtype=np.uint8)
@@ -15,7 +37,7 @@ def _oval_mask(w: int, h: int, feather_px: int) -> np.ndarray:
     return (mask.astype(np.float32) / 255.0)[..., None]
 
 
-def apply_gaussian_blur(frame: np.ndarray, bbox: tuple[int, int, int, int], expand: float = 1.25) -> None:
+def apply_gaussian_blur(frame: np.ndarray, bbox: tuple[int, int, int, int], expand: float = 1.6) -> None:
     """Blur the bbox region in-place. bbox = (x, y, w, h)."""
     fh, fw = frame.shape[:2]
     x, y, w, h = bbox
@@ -33,8 +55,7 @@ def apply_gaussian_blur(frame: np.ndarray, bbox: tuple[int, int, int, int], expa
         return
 
     roi = frame[y2:y_end, x2:x_end]
-    sigma = max(15.0, max(w2, h2) / 4.0)
-    blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma)
+    blurred = _fast_blur(roi)
     mask = _oval_mask(w2, h2, feather_px=int(min(w2, h2) * 0.15))
     frame[y2:y_end, x2:x_end] = (roi * (1 - mask) + blurred * mask).astype(np.uint8)
 
@@ -47,8 +68,7 @@ def apply_gaussian_blur_mask(frame: np.ndarray, mask: np.ndarray) -> None:
         return
     y1, y2, x1, x2 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
     roi = frame[y1:y2, x1:x2]
-    sigma = max(15.0, max(roi.shape[0], roi.shape[1]) / 6.0)
-    blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma)
+    blurred = _fast_blur(roi)
     m = mask[y1:y2, x1:x2].astype(np.float32) / 255.0
     # feather
     k = max(3, (int(min(roi.shape[0], roi.shape[1]) * 0.05)) | 1)

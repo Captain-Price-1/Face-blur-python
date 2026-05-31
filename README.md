@@ -29,6 +29,25 @@ uvicorn app.main:app --reload
 # open http://localhost:8000
 ```
 
+## Use it on your phone (same Wi‑Fi)
+
+The hosted GitHub Pages page is UI-only. To actually process videos on a phone,
+run the backend on your computer so the phone can reach it over Wi‑Fi:
+
+```bash
+./run.sh
+```
+
+This binds to your network and prints a phone URL, e.g. `http://192.168.1.5:8000`.
+On your phone's browser (same Wi‑Fi), open that URL — the full app loads and
+works directly from your computer. No cloud, no extra config.
+
+Notes:
+- Open the `http://<computer-ip>:8000` URL **directly** on the phone. Don't use
+  the `github.io` page for processing — an HTTPS page can't call a plain‑http
+  computer on your LAN (browser "mixed content" block).
+- Your computer must stay on with `./run.sh` running. Works on home Wi‑Fi only.
+
 ## Test
 
 ```bash

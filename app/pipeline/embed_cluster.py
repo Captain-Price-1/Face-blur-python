@@ -25,3 +25,44 @@ def cluster(vectors: list[np.ndarray], eps: float = 0.5, min_samples: int = 2) -
     X = np.stack(vectors)
     labels = DBSCAN(eps=eps, min_samples=min_samples, metric="euclidean").fit_predict(X)
     return labels.tolist()
+
+
+def assign_people(
+    embeddings: list[np.ndarray],
+    frame_sets: list[set[int]],
+    eps: float = 0.5,
+) -> list[int]:
+    """Assign each track to a person, respecting a hard cannot-link constraint.
+
+    Two tracks that share ANY frame are visible at the same time, so they are
+    necessarily different people and must never receive the same person label —
+    no matter how similar their face embeddings look. (Plain DBSCAN ignores
+    this and happily merges several simultaneous people into one cluster, which
+    is the bug this replaces.)
+
+    Greedy: for each track in order, attach it to the nearest existing person
+    that (a) is within `eps` euclidean distance of the track embedding and
+    (b) does not co-occur in time with it; otherwise start a new person.
+    Returns one integer person-label per input track (0-based, dense).
+    """
+    people: list[dict] = []  # {"sum": vec, "n": int, "frames": set}
+    labels: list[int] = []
+    for emb, frames in zip(embeddings, frame_sets):
+        fset = set(frames)
+        best_i, best_d = -1, eps
+        for i, p in enumerate(people):
+            if p["frames"] & fset:          # co-occurs -> cannot be same person
+                continue
+            d = float(np.linalg.norm(p["sum"] / p["n"] - emb))
+            if d < best_d:
+                best_d, best_i = d, i
+        if best_i >= 0:
+            p = people[best_i]
+            p["sum"] = p["sum"] + emb
+            p["n"] += 1
+            p["frames"] |= fset
+            labels.append(best_i)
+        else:
+            people.append({"sum": np.asarray(emb, dtype=np.float64).copy(), "n": 1, "frames": fset})
+            labels.append(len(people) - 1)
+    return labels

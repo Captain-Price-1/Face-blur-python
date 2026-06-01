@@ -169,31 +169,31 @@ def run(job_id: str, progress_cb: Callable[[float], None]) -> None:
 
     progress_cb(0.92)
 
-    # Cluster tracks across the whole video. min_samples=1 means even a single
-    # unique track gets its own cluster label (DBSCAN normally labels singletons
-    # as noise = -1; we don't want to drop unique people).
-    cluster_labels: list[int] = (
-        embed_cluster.cluster(track_embeddings, eps=0.5, min_samples=1)
+    # Assign tracks to people with a HARD cannot-link constraint: tracks that
+    # share any frame are on screen simultaneously, hence different people, and
+    # must never get the same person_id — even if their faces look alike. This
+    # replaces plain DBSCAN, which merged several co-occurring people into one
+    # identity (so selecting one thumbnail blurred multiple switching people).
+    track_frame_sets = [
+        {f for f, _ in tr.samples} for tr in embeddable_tracks
+    ]
+    person_labels: list[int] = (
+        embed_cluster.assign_people(track_embeddings, track_frame_sets, eps=0.5)
         if track_embeddings
         else []
     )
 
-    # Map each (clustered) track to a person_id. Tracks without an embedding
-    # get their own unique person_id — they exist visually and need blurring.
+    # Map each track to a person_id. Tracks without an embedding get their own
+    # unique person_id — they exist visually and need blurring.
     person_id_for_track: dict[int, str] = {}  # id(track) -> "p1"/"p2"/...
-    cluster_to_pid: dict[int, str] = {}
+    label_to_pid: dict[int, str] = {}
     next_pid = 1
 
-    for tr, label in zip(embeddable_tracks, cluster_labels):
-        if label == -1:
-            pid = f"p{next_pid}"
+    for tr, label in zip(embeddable_tracks, person_labels):
+        if label not in label_to_pid:
+            label_to_pid[label] = f"p{next_pid}"
             next_pid += 1
-        else:
-            if label not in cluster_to_pid:
-                cluster_to_pid[label] = f"p{next_pid}"
-                next_pid += 1
-            pid = cluster_to_pid[label]
-        person_id_for_track[id(tr)] = pid
+        person_id_for_track[id(tr)] = label_to_pid[label]
 
     for tr in tracks:
         if id(tr) not in person_id_for_track and tr.best_frame_bgr is not None:

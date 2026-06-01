@@ -37,3 +37,34 @@ def test_cluster_groups_similar_embeddings():
 
 def test_cluster_empty_input():
     assert embed_cluster.cluster([]) == []
+
+
+def test_assign_people_cannot_link_cooccurring_tracks():
+    """Two tracks visible in the SAME frame are different people and must get
+    different labels even when their embeddings are identical (regression for
+    the DBSCAN-merged-identities bug)."""
+    import numpy as np
+    from app.pipeline import embed_cluster
+    v = np.ones(128) / np.linalg.norm(np.ones(128))
+    # Both tracks share frame 10 -> co-occur -> must NOT merge.
+    labels = embed_cluster.assign_people([v, v.copy()], [{0, 5, 10}, {10, 15, 20}])
+    assert labels[0] != labels[1]
+
+
+def test_assign_people_merges_same_person_when_not_cooccurring():
+    """Same face, disjoint times -> same person."""
+    import numpy as np
+    from app.pipeline import embed_cluster
+    v = np.ones(128) / np.linalg.norm(np.ones(128))
+    labels = embed_cluster.assign_people([v, v.copy()], [{0, 1, 2}, {50, 51, 52}])
+    assert labels[0] == labels[1]
+
+
+def test_assign_people_separates_distinct_faces():
+    import numpy as np
+    from app.pipeline import embed_cluster
+    rng = np.random.default_rng(1)
+    a = rng.normal(size=128); a /= np.linalg.norm(a)
+    b = rng.normal(size=128); b /= np.linalg.norm(b)
+    labels = embed_cluster.assign_people([a, b], [{0}, {50}])
+    assert labels[0] != labels[1]

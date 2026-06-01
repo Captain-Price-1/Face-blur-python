@@ -66,6 +66,7 @@ def run(job_id: str, progress_cb: Callable[[float], None]) -> None:
         cmd += ["-i", str(src), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
     cmd += [
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
+        "-movflags", "+faststart",  # moov at front -> instant browser preview
         "-shortest", str(output_path),
     ]
     ffmpeg = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)

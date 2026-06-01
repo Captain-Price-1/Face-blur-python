@@ -89,6 +89,10 @@ def run(
                 "-c:a", "copy"]
     cmd += [
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
+        # +faststart moves the moov index to the front so the browser can
+        # preview/stream the file immediately instead of waiting for the whole
+        # (potentially 100+ MB) download — important for long videos.
+        "-movflags", "+faststart",
         "-shortest",
         str(output_path),
     ]

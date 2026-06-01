@@ -112,3 +112,43 @@ def test_api_render_accepts_blur_mode(tmp_path, monkeypatch, sample_video):
     r = client.get(f"/api/jobs/{job_id}/download")
     assert r.status_code == 200
     assert len(r.content) > 0
+
+
+# ---- _match_body association (regression for wrong-person / flicker bug) ----
+from app.pipeline.render import _match_body
+
+
+def test_match_body_picks_head_owner_not_overlapping_neighbor():
+    # The face: center-x = 150, top = 60.
+    face = (140, 60, 20, 24)
+    # Body A (the true owner): face sits at A's top-center (center-x = 150).
+    A = (110, 55, 80, 250)
+    # Body B: a prominent overlapping neighbour that ALSO fully contains the
+    # face (old containment score = 1.0) and is listed FIRST — exactly the case
+    # the old logic got wrong. The face is off-centre for B and not at B's head,
+    # so the fixed head-position logic correctly prefers A.
+    B = (60, 50, 150, 260)   # center-x = 135, fully contains the face
+    assert _match_body(face, [B, A]) == A
+
+
+def test_match_body_rejects_body_when_face_in_lower_region():
+    # Face down in the torso/legs region of this body -> not its head -> no match.
+    body = (0, 0, 100, 300)
+    face = (40, 250, 20, 24)   # center-y ~262, well below the head region
+    assert _match_body(face, [body]) is None
+
+
+def test_match_body_temporal_continuity_breaks_near_ties():
+    # Two equally-plausible bodies symmetric around the face.
+    left = (110, 50, 60, 240)   # center-x = 140
+    right = (130, 50, 60, 240)  # center-x = 160
+    face = (140, 52, 20, 24)    # center-x = 150 -> equidistant
+    # With prev match == left, it should stick to left (and vice-versa).
+    assert _match_body(face, [left, right], prev_body=left) == left
+    assert _match_body(face, [left, right], prev_body=right) == right
+
+
+def test_match_body_single_body_still_matches():
+    body = (10, 10, 100, 300)
+    face = (45, 14, 20, 24)     # center-x = 55 inside, near top
+    assert _match_body(face, [body]) == body

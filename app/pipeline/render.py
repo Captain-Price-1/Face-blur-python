@@ -159,19 +159,50 @@ def run(
     progress_cb(1.0)
 
 
-def _match_body(face_bbox, body_bboxes):
+def _iou(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _match_body(face_bbox, body_bboxes, prev_body=None):
+    """Pick the body a face belongs to.
+
+    Plain containment is ambiguous when people overlap: a small face can fall
+    inside several body boxes at once. A person's face actually sits at the
+    TOP-CENTER of THEIR body, so we score each candidate by head-position fit
+    (face near the body's top, horizontally centered) instead. A temporal bias
+    toward the body matched on the previous detection tick prevents the blur
+    from flickering between adjacent people. Returns None if no body plausibly
+    owns the face (lower score is better).
+    """
     fx, fy, fw, fh = face_bbox
-    cx, cy = fx + fw / 2, fy + fh / 2
-    best, best_score = None, 0.0
+    fcx = fx + fw / 2.0
+    fcy = fy + fh / 2.0
+    best, best_score = None, None
     for b in body_bboxes:
         bx, by, bw, bh = b
-        if bx <= cx <= bx + bw and by <= cy <= by + bh:
-            ix1, iy1 = max(fx, bx), max(fy, by)
-            ix2, iy2 = min(fx + fw, bx + bw), min(fy + fh, by + bh)
-            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-            score = inter / (fw * fh) if fw * fh else 0.0
-            if score > best_score:
-                best_score, best = score, b
+        if bw <= 0 or bh <= 0:
+            continue
+        # Face center must be horizontally inside the body and in its UPPER
+        # region — a head is never in the lower half of its own body. This
+        # rejects neighbouring bodies that merely overlap the face.
+        if not (bx <= fcx <= bx + bw):
+            continue
+        if fcy < by - fh or fcy > by + 0.55 * bh:
+            continue
+        top_gap = abs(fy - by) / bh            # face top vs body top
+        horiz_off = abs(fcx - (bx + bw / 2.0)) / bw  # face vs body center-x
+        score = top_gap + horiz_off
+        if prev_body is not None:              # temporal continuity
+            score += (1.0 - _iou(b, prev_body)) * 0.6
+        if best_score is None or score < best_score:
+            best_score, best = score, b
     return best
 
 
@@ -195,7 +226,8 @@ def _blur_body_box(
                 face_bbox = _interpolate_bbox(per_person.get(pid, []), frame_idx, max_gap_frames)
                 if face_bbox is None:
                     continue
-                matched = _match_body(face_bbox, bodies)
+                prev = held[pid][0] if pid in held else None
+                matched = _match_body(face_bbox, bodies, prev)
                 if matched is not None:
                     held[pid] = [matched, HOLD_FRAMES_BOX]
 
@@ -231,21 +263,22 @@ def _blur_silhouettes(
                 face_bbox = _interpolate_bbox(per_person.get(pid, []), frame_idx, max_gap_frames)
                 if face_bbox is None:
                     continue
-                matched = _match_body(face_bbox, seg_boxes)
+                prev = held[pid][1] if pid in held else None
+                matched = _match_body(face_bbox, seg_boxes, prev)
                 if matched is None:
                     continue
                 for b, mask in seg:
                     if b == matched:
-                        held[pid] = [mask, HOLD_FRAMES_SIL]
+                        held[pid] = [mask, matched, HOLD_FRAMES_SIL]
                         break
 
     for pid in list(held):
-        mask, ttl = held[pid]
+        mask, bbox, ttl = held[pid]
         apply_gaussian_blur_mask(frame, mask)
         if ttl <= 1:
             del held[pid]
         else:
-            held[pid][1] = ttl - 1
+            held[pid][2] = ttl - 1
 
 
 def _interpolate_bbox(

@@ -28,6 +28,7 @@ import threading
 from collections.abc import Callable
 
 import cv2
+import numpy as np
 
 from app import storage
 from app.pipeline.blur import apply_gaussian_blur, apply_gaussian_blur_mask
@@ -37,10 +38,9 @@ PREFETCH_QUEUE_SIZE = 8
 
 VALID_MODES = ("face", "body_box", "body_silhouette")
 
-TRACK_DETECT_EVERY = 2   # body-detection cadence in the tracking pre-pass
-IOU_CARRY = 0.3          # min IoU to follow the same body across frames
 SIL_DETECT_EVERY = 2     # segmentation cadence in the render pass (silhouette)
 BRIDGE_GAP_FRAMES = 8    # max gap (frames) to linearly bridge in a body track
+SCENE_CUT_DIFF = 30.0    # mean |gray diff| (64x36 thumbs) above which a frame is a shot cut
 
 
 def run(
@@ -211,15 +211,6 @@ def _match_body(face_bbox, body_bboxes, prev_body=None):
     return best
 
 
-def _best_iou_body(prev_box, bodies, thresh):
-    best, best_iou = None, thresh
-    for b in bodies:
-        s = _iou(prev_box, b)
-        if s > best_iou:
-            best_iou, best = s, b
-    return best
-
-
 def _build_body_tracks(
     src,
     blur_person_ids: list[str],
@@ -228,102 +219,138 @@ def _build_body_tracks(
     n_total: int,
     progress_cb: Callable[[float], None],
 ) -> dict[str, dict[int, tuple[int, int, int, int]]]:
-    """Detect bodies on sampled frames, then for each selected person build a
-    dense per-frame body box track: anchor on frames where the face matches a
-    body, then follow that body across frames by IoU (forward and backward),
-    bridging small gaps. The face only identifies the right body; the track
-    itself does not depend on the face being visible."""
+    """ByteTrack pre-pass (the standard MOT approach, via ultralytics).
+
+    1. Track every person through the video with STABLE track IDs — Kalman
+       motion prediction + Hungarian assignment + a track buffer keep the same
+       human on the same ID through crossings and brief occlusions.
+    2. Detect SCENE CUTS (cheap frame-difference) and RESET the tracker at
+       each one. Trackers predict motion across frames; across a hard cut that
+       prediction is meaningless and lets an ID bleed onto a different person
+       in the new shot. Per-shot IDs make that impossible.
+    3. Bind each selected face to track IDs by MAJORITY VOTE across the frames
+       where that face is visible — with face interpolation CLAMPED to the
+       same shot, so a face can never vote for a body in a different shot
+       (stale boxes held across a cut were observed voting for whoever stood
+       at that screen position in the next scene).
+    4. Emit a dense per-frame {frame: body_box} for each selected person,
+       bridging only small tracker dropouts.
+    """
     from app.pipeline import body
 
+    model = body.new_tracking_model()
     cap = cv2.VideoCapture(str(src))
-    det: dict[int, list[tuple[int, int, int, int]]] = {}
+    frame_tracks: list[list[tuple[int, tuple[int, int, int, int]]]] = []
+    shot_of: list[int] = []          # frame index -> shot index
+    shot = 0
+    prev_small: np.ndarray | None = None
     fidx = 0
     while True:
         ok, fr = cap.read()
         if not ok:
             break
-        if fidx % TRACK_DETECT_EVERY == 0:
-            det[fidx] = body.detect_bodies(fr)
-            if fidx % 30 == 0:
-                progress_cb(min(1.0, fidx / max(1, n_total)))
+        small = cv2.resize(cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY), (64, 36)).astype(np.int16)
+        if prev_small is not None and float(np.abs(small - prev_small).mean()) > SCENE_CUT_DIFF:
+            shot += 1
+            model = body.new_tracking_model()  # hard reset: track IDs are per-shot
+        prev_small = small
+        shot_of.append(shot)
+        # Namespace track IDs by shot: the tracker's ID counter restarts on
+        # reset, so a raw ID is only unique within its shot.
+        frame_tracks.append(
+            [((shot, tid), b) for tid, b in body.track_bodies(model, fr)]
+        )
+        if fidx % 30 == 0:
+            progress_cb(min(1.0, fidx / max(1, n_total)))
         fidx += 1
     cap.release()
     progress_cb(1.0)
+    n = len(frame_tracks)
 
-    sampled = sorted(det)
     tracks: dict[str, dict[int, tuple[int, int, int, int]]] = {}
-
     for pid in blur_person_ids:
         samples = per_person.get(pid, [])
         if not samples:
             continue
+        # Face samples grouped by shot, so interpolation can never reach
+        # across a cut.
+        samples_by_shot: dict[int, list] = {}
+        for f, b in samples:
+            if 0 <= f < n:
+                samples_by_shot.setdefault(shot_of[f], []).append((f, b))
 
-        # Anchors: sampled frames where the face matches a body.
-        anchors: dict[int, tuple[int, int, int, int]] = {}
-        for f in sampled:
-            face = _interpolate_bbox(samples, f, max_gap_frames)
+        # Vote: at every frame where this person's face is visible (within the
+        # same shot), head-match the face to the tracked boxes.
+        votes: dict[int, int] = {}
+        for f in range(n):
+            if not frame_tracks[f]:
+                continue
+            shot_samples = samples_by_shot.get(shot_of[f])
+            if not shot_samples:
+                continue
+            face = _interpolate_bbox(shot_samples, f, max_gap_frames)
             if face is None:
                 continue
-            mb = _match_body(face, det[f])
-            if mb is not None:
-                anchors[f] = mb
-        if not anchors:
+            boxes = [b for _, b in frame_tracks[f]]
+            mb = _match_body(face, boxes)
+            if mb is None:
+                continue
+            for tid, b in frame_tracks[f]:
+                if b == mb:
+                    votes[tid] = votes.get(tid, 0) + 1
+                    break
+        if not votes:
             continue
+        total = sum(votes.values())
+        threshold = max(2, int(0.15 * total))
+        strong = {tid for tid, v in votes.items() if v >= threshold}
+        if not strong:
+            strong = {max(votes, key=votes.get)}
 
-        sparse: dict[int, tuple[int, int, int, int]] = dict(anchors)
-        # Forward carry: follow the body after each anchor by IoU.
-        cur = None
-        for f in sampled:
-            if f in anchors:
-                cur = anchors[f]
-            elif cur is not None:
-                nb = _best_iou_body(cur, det[f], IOU_CARRY)
-                if nb is not None:
-                    sparse[f] = nb
-                    cur = nb
-                else:
-                    cur = None
-        # Backward carry: follow the body before the first anchor (kills the
-        # start-up lag) and fill any remaining holes.
-        cur = None
-        for f in reversed(sampled):
-            if f in sparse:
-                cur = sparse[f]
-            elif cur is not None:
-                nb = _best_iou_body(cur, det[f], IOU_CARRY)
-                if nb is not None:
-                    sparse[f] = nb
-                    cur = nb
-                else:
-                    cur = None
-
-        # Densify to every frame: linearly interpolate across small gaps only;
-        # leave large gaps (genuine absence / scene change) unfilled.
         dense: dict[int, tuple[int, int, int, int]] = {}
-        sf = sorted(sparse)
-        for i, f in enumerate(sf):
-            dense[f] = sparse[f]
-            if i + 1 < len(sf):
-                f2 = sf[i + 1]
-                if 1 < (f2 - f) <= BRIDGE_GAP_FRAMES:
-                    a, b = sparse[f], sparse[f2]
-                    for g in range(f + 1, f2):
-                        t = (g - f) / (f2 - f)
-                        dense[g] = tuple(int(a[k] + (b[k] - a[k]) * t) for k in range(4))
+        for f in range(n):
+            cands = [(tid, b) for tid, b in frame_tracks[f] if tid in strong]
+            if cands:
+                # If two selected IDs ever co-occur (rare ID-handoff overlap),
+                # keep the more-voted one.
+                cands.sort(key=lambda tb: -votes.get(tb[0], 0))
+                dense[f] = cands[0][1]
+
+        # Bridge small tracker dropouts by interpolation; leave large gaps
+        # (genuine absence / scene change) unfilled.
+        sf = sorted(dense)
+        for i in range(len(sf) - 1):
+            f, f2 = sf[i], sf[i + 1]
+            if 1 < (f2 - f) <= BRIDGE_GAP_FRAMES:
+                a, b = dense[f], dense[f2]
+                for g in range(f + 1, f2):
+                    t = (g - f) / (f2 - f)
+                    dense[g] = tuple(int(a[k] + (b[k] - a[k]) * t) for k in range(4))
         tracks[pid] = dense
 
     return tracks
 
 
+MASK_MATCH_IOU = 0.5   # a person's OWN seg mask overlaps their tracked box at
+                       # ~0.7-0.95; an overlapping NEIGHBOUR scores ~0.3. Strict
+                       # matching stops a neighbour's mask being blurred when the
+                       # target's own mask is missing from a seg result.
+MASK_STALE_IOU = 0.3   # reuse a held mask only while it still overlaps the track
+
+
 def _blur_silhouettes_tracked(frame, frame_idx, blur_person_ids, body_tracks, held_masks):
-    """Blur the silhouette of each tracked body. Segmentation runs every
-    SIL_DETECT_EVERY frames; the mask is matched to the (face-independent)
-    tracked body box by IoU and reused between segmentation frames. While a
-    person is tracked they are always blurred — by the matched mask, or (until
-    the first mask is found) by a soft box fallback — so coverage never drops."""
+    """Blur the silhouette of each tracked body.
+
+    Segmentation runs every SIL_DETECT_EVERY frames; a mask is accepted for a
+    person only when it STRICTLY matches their (face-independent) tracked box
+    (IoU >= MASK_MATCH_IOU), and is reused between segmentation frames while it
+    still overlaps the moving track. Whenever no trustworthy own-mask exists
+    (the seg model occasionally misses a person entirely), the tracked BOX is
+    blurred instead — guaranteeing the right person stays covered rather than
+    borrowing an overlapping neighbour's mask."""
     from app.pipeline import body
 
-    seg = body.segment_bodies(frame) if frame_idx % SIL_DETECT_EVERY == 0 else None
+    seg = body.segment_bodies(frame, conf=0.3) if frame_idx % SIL_DETECT_EVERY == 0 else None
 
     for pid in blur_person_ids:
         tb = body_tracks.get(pid, {}).get(frame_idx)
@@ -331,18 +358,19 @@ def _blur_silhouettes_tracked(frame, frame_idx, blur_person_ids, body_tracks, he
             held_masks.pop(pid, None)
             continue
         if seg:
-            best_mask, best_iou = None, 0.2
+            best, best_iou = None, MASK_MATCH_IOU
             for bbox, mask in seg:
                 s = _iou(tb, bbox)
                 if s > best_iou:
-                    best_iou, best_mask = s, mask
-            if best_mask is not None:
-                held_masks[pid] = best_mask
-        mask = held_masks.get(pid)
-        if mask is not None:
-            apply_gaussian_blur_mask(frame, mask)
+                    best_iou, best = s, (mask, bbox)
+            if best is not None:
+                held_masks[pid] = best
+        entry = held_masks.get(pid)
+        if entry is not None and _iou(tb, entry[1]) >= MASK_STALE_IOU:
+            apply_gaussian_blur_mask(frame, entry[0])
         else:
-            apply_gaussian_blur(frame, tb, expand=1.05)  # brief fallback until a mask is found
+            held_masks.pop(pid, None)
+            apply_gaussian_blur(frame, tb, expand=1.05)  # right person, box coverage
 
 
 def _interpolate_bbox(

@@ -30,6 +30,45 @@ def _get_segmenter():
     return _segmenter
 
 
+def new_tracking_model():
+    """A FRESH detection model instance for ByteTrack tracking.
+
+    `model.track(persist=True)` carries tracker state (Kalman filters, ID
+    counters) inside the model instance, so each render job must get its own
+    instance rather than the shared singleton — otherwise track IDs and motion
+    state would leak between videos.
+    """
+    from ultralytics import YOLO
+    return YOLO(str(_DETECT_PATH))
+
+
+def track_bodies(model, frame_bgr: np.ndarray, conf: float = CONF) -> list[tuple[int, tuple[int, int, int, int]]]:
+    """One ByteTrack tracking step on a frame: [(track_id, (x, y, w, h)), ...].
+
+    Track IDs are STABLE across frames — Kalman motion prediction, Hungarian
+    assignment and a track buffer keep the same person on the same ID through
+    crossings and brief occlusions (the standard MOT machinery that naive
+    IoU-carry lacks). Call with consecutive frames of one video only.
+    """
+    res = model.track(
+        frame_bgr,
+        persist=True,
+        tracker="bytetrack.yaml",
+        classes=[0],
+        conf=conf,
+        verbose=False,
+    )[0]
+    out: list[tuple[int, tuple[int, int, int, int]]] = []
+    if res.boxes is None or res.boxes.id is None:
+        return out
+    ids = res.boxes.id.int().cpu().tolist()
+    for tid, b in zip(ids, res.boxes.xyxy.cpu().numpy()):
+        x1, y1, x2, y2 = (int(v) for v in b)
+        if x2 > x1 and y2 > y1:
+            out.append((int(tid), (x1, y1, x2 - x1, y2 - y1)))
+    return out
+
+
 def detect_bodies(frame_bgr: np.ndarray, conf: float = CONF) -> list[tuple[int, int, int, int]]:
     """Person bounding boxes as (x, y, w, h)."""
     res = _get_detector()(frame_bgr, classes=[0], conf=conf, verbose=False)[0]

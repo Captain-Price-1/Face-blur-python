@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from app import ffmpeg_utils, storage
-from app.pipeline import detect, embed_cluster
+from app.pipeline import detect
 
 SAMPLE_EVERY_N_FRAMES = 5     # 1 = every frame; higher = faster, sparser bbox samples
 DETECT_MAX_DIM = 640          # downsample frames bigger than this for detection
@@ -153,50 +153,21 @@ def run(job_id: str, progress_cb: Callable[[float], None]) -> None:
         frame_idx += 1
     cap.release()
 
-    progress_cb(0.85)
-
-    # Embed one face per track. Skip tracks where embedding can't be computed.
-    track_embeddings: list[np.ndarray] = []
-    embeddable_tracks: list[_Track] = []
-    for tr in tracks:
-        if tr.best_frame_bgr is None or tr.best_bbox is None:
-            continue
-        emb = embed_cluster.embed_face(tr.best_frame_bgr, tr.best_bbox)
-        if emb is None:
-            continue
-        embeddable_tracks.append(tr)
-        track_embeddings.append(emb)
-
     progress_cb(0.92)
 
-    # Assign tracks to people with a HARD cannot-link constraint: tracks that
-    # share any frame are on screen simultaneously, hence different people, and
-    # must never get the same person_id — even if their faces look alike. This
-    # replaces plain DBSCAN, which merged several co-occurring people into one
-    # identity (so selecting one thumbnail blurred multiple switching people).
-    track_frame_sets = [
-        {f for f, _ in tr.samples} for tr in embeddable_tracks
-    ]
-    person_labels: list[int] = (
-        embed_cluster.assign_people(track_embeddings, track_frame_sets, eps=0.5)
-        if track_embeddings
-        else []
-    )
-
-    # Map each track to a person_id. Tracks without an embedding get their own
-    # unique person_id — they exist visually and need blurring.
+    # ONE PERSON PER TRACK — we deliberately do NOT merge tracks across time
+    # by face embedding. dlib embeddings computed on small video face crops are
+    # too noisy for safe cross-shot identity merging: in real footage two
+    # DIFFERENT men merged at distance < 0.5, so selecting one person silently
+    # blurred an innocent other. A duplicate thumbnail for the same person
+    # (e.g. across scene cuts) is a minor UX cost; blurring the wrong human is
+    # a catastrophic one. The picker tells users to select every tile of their
+    # target. (embed_cluster.assign_people retains the cannot-link clustering
+    # machinery should a stronger re-ID model land later.)
     person_id_for_track: dict[int, str] = {}  # id(track) -> "p1"/"p2"/...
-    label_to_pid: dict[int, str] = {}
     next_pid = 1
-
-    for tr, label in zip(embeddable_tracks, person_labels):
-        if label not in label_to_pid:
-            label_to_pid[label] = f"p{next_pid}"
-            next_pid += 1
-        person_id_for_track[id(tr)] = label_to_pid[label]
-
     for tr in tracks:
-        if id(tr) not in person_id_for_track and tr.best_frame_bgr is not None:
+        if tr.best_thumb_bgr is not None:
             person_id_for_track[id(tr)] = f"p{next_pid}"
             next_pid += 1
 

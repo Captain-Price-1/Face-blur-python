@@ -30,6 +30,74 @@ def _get_segmenter():
     return _segmenter
 
 
+_edgetam_model = None
+_edgetam_proc = None
+
+
+def _get_edgetam(device: str = "cpu"):
+    global _edgetam_model, _edgetam_proc
+    if _edgetam_model is None:
+        from transformers import EdgeTamVideoModel, Sam2VideoProcessor
+        _edgetam_model = (
+            EdgeTamVideoModel.from_pretrained("yonigozlan/EdgeTAM-hf").to(device).eval()
+        )
+        _edgetam_proc = Sam2VideoProcessor.from_pretrained("yonigozlan/EdgeTAM-hf")
+    return _edgetam_model, _edgetam_proc
+
+
+def track_masks(
+    frames_rgb: list,
+    seeds: list[tuple[int, int, tuple[int, int]]],
+    device: str = "cpu",
+) -> dict[int, np.ndarray]:
+    """Promptable video segmentation (EdgeTAM / SAM2-style).
+
+    Each seed is a (obj_id, frame_idx, (x, y)) positive point prompt placed on
+    the person to track. EdgeTAM segments the object under each point and
+    propagates its silhouette mask across the whole clip using a learned memory
+    bank — this is what keeps the blur locked on the *selected* person and off
+    everyone else, through crossings and occlusions.
+
+    `frames_rgb` are the (already downscaled) RGB frames fed to the model.
+    Returns {frame_idx: union_mask} where union_mask is a HxW uint8 {0,1} of all
+    requested objects merged.
+    """
+    import torch
+
+    if not frames_rgb or not seeds:
+        return {}
+    model, proc = _get_edgetam(device)
+    h, w = frames_rgb[0].shape[:2]
+
+    # Each seed is (obj_id, seed_frame, [(x,y), ...]) with seed_frame = the
+    # person's FIRST appearance. We process each object in its own session and
+    # propagate FORWARD ONLY from its seed: the person is present from their
+    # seed onward, so a forward pass covers their whole appearance at half the
+    # cost of a bidirectional pass. (A single shared session with objects
+    # seeded at *different* frames is rejected by this EdgeTAM build, so we
+    # session-per-object — fine for the handful of people a user selects.)
+    masks: dict[int, np.ndarray] = {}
+    for obj_id, seed_frame, pts in seeds:
+        pts = list(pts)
+        session = proc.init_video_session(video=frames_rgb, inference_device=device)
+        proc.add_inputs_to_inference_session(
+            inference_session=session,
+            frame_idx=int(seed_frame),
+            obj_ids=int(obj_id),
+            input_points=[[[list(p) for p in pts]]],
+            input_labels=[[[1] * len(pts)]],
+        )
+        with torch.inference_mode():
+            for out in model.propagate_in_video_iterator(
+                session, start_frame_idx=int(seed_frame)
+            ):
+                pm = proc.post_process_masks([out.pred_masks], [(h, w)], binarize=True)[0]
+                m = (pm.cpu().numpy().reshape(-1, h, w) > 0.5).any(axis=0).astype(np.uint8)
+                prev = masks.get(out.frame_idx)
+                masks[out.frame_idx] = m if prev is None else (prev | m)
+    return masks
+
+
 def new_tracking_model():
     """A FRESH detection model instance for ByteTrack tracking.
 

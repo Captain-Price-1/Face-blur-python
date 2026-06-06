@@ -1,4 +1,4 @@
-import { getJob, wsUrl } from "./api.js?v=5";
+import { getJob, wsUrl } from "./api.js?v=6";
 
 /**
  * Drive a job's UI updates.

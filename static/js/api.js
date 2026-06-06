@@ -1,4 +1,4 @@
-import { getApiBase } from "./config.js?v=5";
+import { getApiBase } from "./config.js?v=6";
 
 const base = () => getApiBase();
 
@@ -46,6 +46,11 @@ export async function startRender(jobId, blurPersonIds, blurMode = "face") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ blur_person_ids: blurPersonIds, blur_mode: blurMode }),
   });
+  if (!r.ok) {
+    let detail = `render failed: ${r.status}`;
+    try { detail = (await r.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
   return r.json();
 }
 

@@ -22,6 +22,12 @@ app.add_middleware(
 )
 
 
+# Whole-body blur (EdgeTAM) loads the clip into memory and is ~9x real-time on
+# CPU, so it's only safe for short clips. Longer videos must use face-only or
+# blur-everyone (both stream in constant memory).
+MAX_BODY_BLUR_SEC = 120
+
+
 class RenderRequest(BaseModel):
     blur_person_ids: list[str]
     blur_mode: str = "face"
@@ -83,6 +89,8 @@ def get_people(job_id: str) -> dict:
         raise HTTPException(409, "analysis not ready")
     data = storage.read_analysis(job_id)
     return {
+        "duration_sec": data.get("duration_sec", 0.0),
+        "max_body_blur_sec": MAX_BODY_BLUR_SEC,
         "people": [
             {
                 "id": p["id"],
@@ -91,7 +99,7 @@ def get_people(job_id: str) -> dict:
                 "first_seen_sec": p["first_seen_sec"],
             }
             for p in data["people"]
-        ]
+        ],
     }
 
 
@@ -110,6 +118,15 @@ def start_render(job_id: str, body: RenderRequest) -> dict:
         raise HTTPException(404, "job not found")
     if body.blur_mode not in {"face", "body_box", "body_silhouette"}:
         raise HTTPException(400, "invalid blur_mode")
+    if body.blur_mode in ("body_box", "body_silhouette"):
+        dur = storage.read_analysis(job_id).get("duration_sec", 0.0)
+        if dur > MAX_BODY_BLUR_SEC:
+            raise HTTPException(
+                400,
+                f"Whole-body blur supports clips up to {MAX_BODY_BLUR_SEC // 60} minutes "
+                f"(this video is {dur / 60:.1f} min). For longer videos use "
+                f"'Face only', or 'Blur everyone' on the upload page.",
+            )
     jobs.start_render(job_id, body.blur_person_ids, body.blur_mode)
     return {"status": "rendering"}
 

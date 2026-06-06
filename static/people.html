@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Face Blur — Choose faces</title>
-  <link rel="stylesheet" href="css/app.css?v=5">
+  <link rel="stylesheet" href="css/app.css?v=6">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -79,9 +79,9 @@
   <footer class="foot">Runs locally · OpenCV · YuNet · YOLO11</footer>
 
   <script type="module">
-    import { getPeople, startRender } from "./js/api.js?v=5";
-    import { subscribe } from "./js/progress.js?v=5";
-    import { initShell, toast } from "./js/ui.js?v=5";
+    import { getPeople, startRender } from "./js/api.js?v=6";
+    import { subscribe } from "./js/progress.js?v=6";
+    import { initShell, toast } from "./js/ui.js?v=6";
     initShell();
 
     const jobId = new URLSearchParams(location.search).get("job");
@@ -125,11 +125,28 @@
       if (pickerShown) return;
       pickerShown = true;
       try {
-        const { people } = await getPeople(jobId);
+        const data = await getPeople(jobId);
+        const people = data.people || [];
         $("analyzing").style.display = "none";
         $("picker").style.display = "block";
         if (!people.length) { toast("No faces detected in this video.", true); }
         renderPeople(people);
+        // Whole-body blur is short-clip-only; disable it for long videos.
+        const cap = data.max_body_blur_sec || 120;
+        if ((data.duration_sec || 0) > cap) {
+          document.querySelectorAll('input[name=mode]').forEach(r => {
+            if (r.value !== "face") {
+              r.disabled = true;
+              r.closest(".opt").style.opacity = "0.45";
+            }
+          });
+          const note = document.createElement("p");
+          note.style.cssText = "font-size:.8rem;color:var(--warn);margin:.5em 2px 0";
+          note.textContent = `Whole-body blur is available for clips up to ${Math.round(cap/60)} min. ` +
+            `This video is ${(data.duration_sec/60).toFixed(1)} min, so only Face-only is enabled ` +
+            `(or use 'Blur everyone' on the upload page).`;
+          document.querySelector(".scope").appendChild(note);
+        }
         updateCount();
       } catch (e) { toast("Could not load faces: " + e.message, true); }
     }
